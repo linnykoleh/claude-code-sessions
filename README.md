@@ -4,8 +4,6 @@
 
 ![ccs: statistics on top, sessions of all projects below with cost, time and context fill, the selected session's context and cache bars and prompts on the right; then text search and renaming](demo/ccs.svg)
 
-*The demo runs on made-up sessions ([demo/make_demo.py](demo/make_demo.py)).*
-
 ## Install
 
 One command, on macOS or Linux:
