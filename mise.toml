@@ -1,0 +1,16 @@
+# Tools for working on ccs:  mise install
+[tools]
+uv = "latest"
+fzf = "latest"
+
+[tasks.test]
+description = "Run the tests"
+run = "uv run --group dev pytest -q"
+
+[tasks.install]
+description = "Install the ccs command from this checkout"
+run = "./install.sh"
+
+[tasks.uninstall]
+description = "Remove the ccs command and its cache"
+run = "./install.sh --uninstall"
