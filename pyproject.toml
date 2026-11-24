@@ -4,6 +4,8 @@ version = "0.1.0"
 description = "ccs: browse and resume every Claude Code session across all your projects"
 readme = "README.md"
 requires-python = ">=3.9"
+license = "MIT"
+license-files = ["LICENSE"]
 dependencies = []
 classifiers = [
     "Environment :: Console",
@@ -19,7 +21,7 @@ ccs = "ccs.cli:main"
 dev = ["pytest>=8"]
 
 [build-system]
-requires = ["hatchling"]
+requires = ["hatchling>=1.27"]  # 1.27: PEP 639 license fields
 build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
