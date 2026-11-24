@@ -2,37 +2,9 @@
 
 `ccs` lists every [Claude Code](https://docs.anthropic.com/en/docs/claude-code) session you have run, across all your projects, newest first. Search it, preview what you asked, and press Enter to jump back into a session in the right folder.
 
-```
-sessions>
-                     SESSIONS  PROJECTS      COST  CLAUDE TIME
-  Today                     4         2       $43       2h 45m
-  Last 7 days              31         6      $304       12h 4m
-  Last 30 days            112        14    $1,658      51h 52m
-  Since 2026-10-22        130        15    $2,037       68h 1m
-  Top projects: payments-api $788 · infra $418 · docs $156
+![ccs: statistics on top, sessions of all projects below, the selected session's prompts on the right](demo/ccs.svg)
 
-  Enter: resume · Esc: quit
-  ● 1 Claude is working · ○ 1 open, waiting for you · ! 1 stopped mid-turn
-
-  LAST ACTIVITY       PROJECT             COST TIME   TITLE
-> 2026-11-24 14:23    payments-api         $12   3h ● Fix retry logic in the refund worker
-  2026-11-24 11:05    infra                 $3  40m ○ Terraform plan for the new region
-  2026-11-23 18:40    payments-api         $27   1d ! Add idempotency keys to webhooks
-  2026-11-22 09:12    docs                  $1  12m   Rewrite the onboarding guide
-```
-
-The preview pane on the right shows the selected session:
-
-```
-Fix retry logic in the refund worker
-📁 /Users/you/code/payments-api
-🌿 PAY-512-refund-retries
-🆔 3f9c2e1a-8b7d-4c55-9a10-6e2f4d1b7c33
-
-2026-11-24 11:20  The refund worker retries forever when the bank API returns 409. Find out why.
-2026-11-24 11:42  Make the retry policy configurable and add a test for the 409 case.
-2026-11-24 14:10  Write the MR description.
-```
+*The demo runs on made-up sessions ([demo/make_demo.py](demo/make_demo.py)).*
 
 ## Why not `claude --resume`?
 
@@ -165,6 +137,7 @@ uv and fzf stay installed.
 mise install            # uv and fzf
 mise run test           # or: uv run --group dev pytest -q
 uv run ccs --list       # run from the checkout
+python demo/record.py   # re-record demo/ccs.svg on made-up sessions (needs tmux)
 ```
 
 The code is in `src/ccs/`: `sessions.py` reads transcripts, `pricing.py` handles prices, `index.py` the cache, `cli.py` the list and fzf.
