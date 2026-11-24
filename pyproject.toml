@@ -7,12 +7,23 @@ requires-python = ">=3.9"
 license = "MIT"
 license-files = ["LICENSE"]
 dependencies = []
+keywords = [
+    "claude-code", "claude", "anthropic", "ai-coding", "agentic-coding", "cli", "terminal", "tui", "fzf",
+    "session-manager", "session-history", "conversation-history", "resume", "developer-tools", "productivity",
+    "token-usage", "cost",
+]
 classifiers = [
     "Environment :: Console",
     "Operating System :: MacOS",
     "Operating System :: POSIX :: Linux",
     "Programming Language :: Python :: 3",
 ]
+
+[project.urls]
+Homepage = "https://github.com/linnykoleh/claude-code-sessions"
+Documentation = "https://github.com/linnykoleh/claude-code-sessions#readme"
+Repository = "https://github.com/linnykoleh/claude-code-sessions"
+Issues = "https://github.com/linnykoleh/claude-code-sessions/issues"
 
 [project.scripts]
 ccs = "ccs.cli:main"
