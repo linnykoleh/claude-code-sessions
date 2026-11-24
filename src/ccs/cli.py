@@ -22,7 +22,7 @@ from ccs import __version__
 from ccs.index import load_sessions
 from ccs.launch import ask_tty, resume_command, where
 from ccs.search import highlight, query_words, search, snippets
-from ccs.pricing import load_prices
+from ccs.pricing import context_window, load_prices
 from ccs.sessions import Live, Session, live_status, local_day, parse_session, prompts, rename_session
 
 CLAUDE_DIR = Path(os.environ.get("CLAUDE_CONFIG_DIR", Path.home() / ".claude"))
@@ -35,6 +35,10 @@ TIME_WIDTH, PROJECT_WIDTH, TITLE_WIDTH = 19, 18, 60  # the date is 16 wide; 3 mo
 STATUS_LEGEND = {"●": "Claude is working", "○": "open, waiting for you", "!": "stopped mid-turn"}
 LIST_PROMPT, TEXT_PROMPT = "sessions> ", "text> "
 HIT = "\033[1;33m"  # search words in the preview
+GREEN, YELLOW, RED = "\033[32m", "\033[33m", "\033[31m"
+BAR_WIDTH, EIGHTHS = 20, " ▏▎▍▌▋▊▉"
+# fzf fields: the 7 visible columns, then hidden ones the bindings use
+FILE_FIELD, CWD_FIELD, ID_FIELD = 8, 9, 10
 
 
 def main(argv: Optional[List[str]] = None) -> int:
@@ -94,19 +98,73 @@ def search_query(words: Optional[List[str]]) -> Optional[str]:
 
 # The title goes last: when the fzf pane is narrow, only the title gets cut.
 def header_row() -> str:
-    return "\t".join([pad("LAST ACTIVITY", TIME_WIDTH), pad("PROJECT", PROJECT_WIDTH), " COST", "TIME", " ", "TITLE"])
+    return "\t".join([pad("LAST ACTIVITY", TIME_WIDTH), pad("PROJECT", PROJECT_WIDTH), " COST", "TIME", " CTX", " ",
+                      "TITLE"])
 
 
-def row(s: Session, prices, live: Dict[str, Live]) -> str:
+def row(s: Session, prices, live: Dict[str, Live], color: bool = False) -> str:
     cost = s.usage.cost(prices)
     return "\t".join([
         pad(fmt_time(s.last_ts), TIME_WIDTH),
         pad(s.project, PROJECT_WIDTH),
         (fmt_money(cost) if cost is not None else "—").rjust(5),
         fmt_duration(span(s)).rjust(4),
+        ctx_cell(s, prices, color),
         status_mark(s, live),
         cut(s.title or "(untitled)", TITLE_WIDTH),
     ])
+
+
+def context_share(s: Session, prices) -> Optional[float]:
+    """How full the context window was at the last response, 0..1; None before the first response."""
+    if not s.context:
+        return None
+    return min(s.context / context_window(s.model, prices, s.context), 1.0)
+
+
+def ctx_cell(s: Session, prices, color: bool) -> str:
+    share = context_share(s, prices)
+    if share is None:
+        return "    "
+    text = f"{share:4.0%}"
+    return f"{fill_color(share)}{text}{RESET}" if color else text
+
+
+def fill_color(share: float) -> str:
+    """Green while there is room, yellow from half full, red from 80 %, when Claude Code is close to compacting."""
+    return GREEN if share < 0.5 else YELLOW if share < 0.8 else RED
+
+
+def bar(share: float, color: str) -> str:
+    """A bar BAR_WIDTH cells wide, precise to an eighth of a cell; the empty part dim."""
+    eighths = int(share * BAR_WIDTH * 8)
+    full, part = divmod(eighths, 8)
+    filled = "█" * full + (EIGHTHS[part] if part else "")
+    return f"{color}{filled}{RESET}{DIM}{'░' * (BAR_WIDTH - len(filled))}{RESET}"
+
+
+def usage_lines(s: Session, prices) -> List[str]:
+    """The preview's context and cache lines; none before the first response."""
+    share = context_share(s, prices)
+    if share is None:
+        return []
+    window = context_window(s.model, prices, s.context)
+    lines = [f"🧠 {bar(share, fill_color(share))} {share:4.0%}  {fmt_tokens(s.context)} of {fmt_tokens(window)} context"
+             f" · {s.model}"]
+    t = {k: sum(m.get(k, 0) for m in s.usage.tokens.values())
+         for k in ("input", "cache_write", "cache_write_1h", "cache_read")}
+    total_input = sum(t.values())
+    if total_input:
+        hit = t["cache_read"] / total_input  # high is good: cached input costs a tenth
+        color = GREEN if hit >= 0.8 else YELLOW if hit >= 0.5 else RED
+        lines.append(f"⚡ {bar(hit, color)} {hit:4.0%}  of input read from the prompt cache")
+    return lines
+
+
+def fmt_tokens(n: int) -> str:
+    if n >= 1_000_000:
+        return f"{n / 1_000_000:.1f}".rstrip("0").rstrip(".") + "M"
+    return f"{round(n / 1000)}K" if n >= 1000 else str(n)
 
 
 def status_mark(s: Session, live: Dict[str, Live]) -> str:
@@ -216,17 +274,16 @@ def me_command() -> str:
 
 
 def fzf_lines(sessions: List[Session], prices, live: Dict[str, Live]) -> List[str]:
-    # hidden fields after the visible columns: 7 = transcript file, 8 = cwd, 9 = session id
-    return [header_row()] + [f"{row(s, prices, live)}\t{s.file}\t{s.cwd}\t{s.id}" for s in sessions]
+    return [header_row()] + [f"{row(s, prices, live, color=True)}\t{s.file}\t{s.cwd}\t{s.id}" for s in sessions]
 
 
 def switch_actions(prompt: str, me: str) -> str:
     """fzf actions for Ctrl-S. The list filters itself (fuzzy, over title, project and date);
     text search turns fzf's own filter off and asks ccs for the matching sessions on every keystroke."""
     if prompt == TEXT_PROMPT:
-        return (f"change-prompt({LIST_PROMPT})+enable-search+change-preview({me} --preview {{7}})"
+        return (f"change-prompt({LIST_PROMPT})+enable-search+change-preview({me} --preview {{{FILE_FIELD}}})"
                 f"+reload({me} --rows '')+unbind(change)")
-    return (f"change-prompt({TEXT_PROMPT})+disable-search+change-preview({me} --preview {{7}} --find {{q}})"
+    return (f"change-prompt({TEXT_PROMPT})+disable-search+change-preview({me} --preview {{{FILE_FIELD}}} --find {{q}})"
             f"+reload({me} --rows {{q}})+rebind(change)")
 
 
@@ -243,20 +300,20 @@ def pick(sessions: List[Session], prices, live: Dict[str, Live], query: Optional
     keys = "Enter: resume · Ctrl-S: search inside conversations · Ctrl-R: rename · Esc: quit"
     header = f"{stats}\n\n{keys}\n{legend(sessions, live)}\n "  # blank lines set the parts apart
     cmd = [
-        fzf, "--ansi", "--layout=reverse", "--header-lines=1", "--delimiter=\t", "--with-nth=1..6",
+        fzf, "--ansi", "--layout=reverse", "--header-lines=1", "--delimiter=\t", f"--with-nth=1..{FILE_FIELD - 1}",
         "--tabstop=1",  # columns are padded already; a tab adds one space, not up to eight
         "--no-sort", "--tiebreak=index",
         f"--header={header}", "--preview-window=right,50%,wrap",
         f"--bind=ctrl-s:transform:{me} --switch",
         f"--bind=change:reload:{me} --rows {{q}}",
-        f"--bind=ctrl-r:execute({me} --rename {{9}} {{7}})+reload({me} --refresh)",
+        f"--bind=ctrl-r:execute({me} --rename {{{ID_FIELD}}} {{{FILE_FIELD}}})+reload({me} --refresh)",
     ]
     if query is None:
         shown = sessions
-        cmd += [f"--prompt={LIST_PROMPT}", f"--preview={me} --preview {{7}}", "--bind=start:unbind(change)"]
+        cmd += [f"--prompt={LIST_PROMPT}", f"--preview={me} --preview {{{FILE_FIELD}}}", "--bind=start:unbind(change)"]
     else:
         shown = search(sessions, query, CACHE_DIR)
-        cmd += [f"--prompt={TEXT_PROMPT}", f"--preview={me} --preview {{7}} --find {{q}}", "--disabled",
+        cmd += [f"--prompt={TEXT_PROMPT}", f"--preview={me} --preview {{{FILE_FIELD}}} --find {{q}}", "--disabled",
                 f"--query={query}"]
     lines = fzf_lines(shown, prices, live)
     result = subprocess.run(cmd, input="\n".join(lines), stdout=subprocess.PIPE, text=True)
@@ -264,7 +321,7 @@ def pick(sessions: List[Session], prices, live: Dict[str, Live], query: Optional
         return 0  # Esc or Ctrl-C
 
     fields = result.stdout.rstrip("\n").split("\t")
-    cwd, session_id = fields[7], fields[8]
+    cwd, session_id = fields[CWD_FIELD - 1], fields[ID_FIELD - 1]
     if not os.path.isdir(cwd):
         print(f"Folder {cwd} no longer exists. Session ID: {session_id}", file=sys.stderr)
         return 1
@@ -279,7 +336,7 @@ def pick(sessions: List[Session], prices, live: Dict[str, Live], query: Optional
 
 def print_preview(path: Path, words: Optional[List[str]] = None) -> None:
     """The session's title, folder, branch and id, then your prompts; in text search, the messages that match."""
-    s = parse_session(path, with_usage=False) if path.exists() else None
+    s = parse_session(path) if path.exists() else None
     if s is None:
         print(f"{path} not found")
         return
@@ -288,6 +345,8 @@ def print_preview(path: Path, words: Optional[List[str]] = None) -> None:
     if s.branch:
         print(f"🌿 {s.branch}")
     print(f"🆔 {s.id}")
+    for line in usage_lines(s, load_prices(CACHE_DIR)):
+        print(line)
     print()
     if words:
         hits = snippets(path, words)

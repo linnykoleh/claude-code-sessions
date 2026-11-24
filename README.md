@@ -2,7 +2,7 @@
 
 `ccs` lists every [Claude Code](https://docs.anthropic.com/en/docs/claude-code) session you have run, across all your projects, newest first. Search it, preview what you asked, and press Enter to jump back into a session in the right folder.
 
-![ccs: statistics on top, sessions of all projects below, the selected session's prompts on the right](demo/ccs.svg)
+![ccs: statistics on top, sessions of all projects below with cost, time and context fill, the selected session's context and cache bars and prompts on the right; then text search and renaming](demo/ccs.svg)
 
 *The demo runs on made-up sessions ([demo/make_demo.py](demo/make_demo.py)).*
 
@@ -118,8 +118,11 @@ The line under the keys counts sessions by status.
 | PROJECT | the folder the session ran in |
 | COST | what the tokens would cost at Anthropic API list prices, subagents included. On a subscription this is not what you pay; it shows how much work went into the session |
 | TIME | from the first to the last message |
+| CTX | how full the context window was at the last answer: green below 50 %, yellow up to 80 %, red from 80 %, when Claude Code is about to compact. The window comes from LiteLLM's table (1M for current models); a session that already held more than 200K counts as 1M |
 | (status) | `●` Claude is working in it right now; `○` it is open in a terminal and waits for you; `!` it was closed before Claude finished its turn: you pressed Esc, declined a tool, or your last prompt got no answer. Blank: closed after Claude answered |
 | TITLE | the name you gave it with `/rename`, else Claude's title, else your first prompt. It comes last, so a narrow window cuts only the title |
+
+The preview also shows two bars: 🧠 the context window (tokens and model) and ⚡ how much of the input Claude read from the prompt cache over the whole session, subagents included. Cached input costs a tenth, so green is good there.
 
 ## How it works
 

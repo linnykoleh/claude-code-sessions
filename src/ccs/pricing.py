@@ -24,7 +24,7 @@ Prices = Dict[str, Dict[str, float]]
 def load_prices(cache_dir: Path) -> Prices:
     """Return {model: {input, output, cache_write, cache_write_1h, cache_read}} in USD per token,
     or {} if unavailable."""
-    path = cache_dir / "prices-v2.json"
+    path = cache_dir / "prices-v3.json"
     fresh = path.exists() and time.time() - path.stat().st_mtime < MAX_AGE_SECONDS
     if not fresh and not os.environ.get("CCS_OFFLINE"):
         try:
@@ -50,6 +50,7 @@ def _download(path: Path) -> None:
             or entry.get("cache_creation_input_token_cost")
             or 0.0,
             "cache_read": entry.get("cache_read_input_token_cost") or 0.0,
+            "context": entry.get("max_input_tokens") or 0,  # the context window, in tokens
         }
         for name, entry in table.items()
         if name.startswith("claude-") and isinstance(entry, dict)
@@ -58,6 +59,13 @@ def _download(path: Path) -> None:
     tmp = path.with_suffix(".tmp")
     tmp.write_text(json.dumps(prices))
     tmp.replace(path)
+
+
+def context_window(model: str, prices: Prices, used: int) -> int:
+    """The model's context window from the table, else the classic 200K. A session that already held more
+    than that ran with the 1M window."""
+    window = int((price_for(model, prices) or {}).get("context") or 200_000)
+    return 1_000_000 if used > window else window
 
 
 def price_for(model: str, prices: Prices) -> Optional[Dict[str, float]]:

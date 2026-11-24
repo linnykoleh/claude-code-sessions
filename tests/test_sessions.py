@@ -188,11 +188,11 @@ def test_live_status_keeps_running_processes_only(tmp_path):
 def test_row_puts_title_last_and_marks_status():
     s = Session(id="a", file="f", cwd="/code/payments-api", title="Fix it", first_ts=1e9, last_ts=1e9 + 3 * 3600)
     fields = row(s, PRICES, {}).split("\t")
-    assert [f.strip() for f in fields[2:]] == ["$0", "3h", "", "Fix it"]
-    assert row(s, PRICES, {"a": Live(pid=1, busy=True)}).split("\t")[4] == "●"
-    assert row(s, PRICES, {"a": Live(pid=1, busy=False)}).split("\t")[4] == "○"
+    assert [f.strip() for f in fields[2:]] == ["$0", "3h", "", "", "Fix it"]  # no context known: CTX is blank
+    assert row(s, PRICES, {"a": Live(pid=1, busy=True)}).split("\t")[5] == "●"
+    assert row(s, PRICES, {"a": Live(pid=1, busy=False)}).split("\t")[5] == "○"
     s.interrupted = True
-    assert row(s, PRICES, {}).split("\t")[4] == "!"
+    assert row(s, PRICES, {}).split("\t")[5] == "!"
 
 
 

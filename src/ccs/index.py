@@ -9,7 +9,7 @@ from typing import Dict, List
 
 from ccs.sessions import Session, find_session_files, parse_session
 
-CACHE_VERSION = 5
+CACHE_VERSION = 6
 
 
 def load_sessions(projects_dir: Path, cache_dir: Path) -> List[Session]:

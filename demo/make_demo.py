@@ -22,12 +22,16 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 # Illustrative prices in USD per token, enough to give the demo realistic-looking costs.
+# "context" is the context window in tokens, as ccs keeps it from LiteLLM's table.
 PRICES = {
     "claude-opus-5-5": {"input": 5e-6, "output": 25e-6, "cache_write": 6.25e-6, "cache_write_1h": 10e-6,
-                        "cache_read": 0.5e-6},
+                        "cache_read": 0.5e-6, "context": 1_000_000},
     "claude-sonnet-5-5": {"input": 3e-6, "output": 15e-6, "cache_write": 3.75e-6, "cache_write_1h": 6e-6,
-                          "cache_read": 0.3e-6},
+                          "cache_read": 0.3e-6, "context": 1_000_000},
 }
+CONTEXT_PER_RESPONSE = 4_000  # how much each response adds to the context, so long sessions fill up more
+# Sessions whose context ends elsewhere, so the CTX column shows yellow and red too (share of the 1M window)
+CONTEXT_AT_END = {"Add idempotency keys to webhooks": 0.86, "Upgrade React Native to 0.79": 0.71}
 
 HOME = "/Users/you/code"
 MINUTE, HOUR, DAY = 60, 3600, 86400
@@ -119,7 +123,7 @@ def main() -> None:
         shutil.rmtree(args.out)
     claude_dir, cache_dir = args.out / "claude", args.out / "cache" / "cc-sessions"
     cache_dir.mkdir(parents=True)
-    (cache_dir / "prices-v2.json").write_text(json.dumps(PRICES))
+    (cache_dir / "prices-v3.json").write_text(json.dumps(PRICES))
     (claude_dir / "sessions").mkdir(parents=True)
 
     rng = random.Random(42)
@@ -145,6 +149,8 @@ def transcript(rng, sid, cwd, branch, title, start, lasted, responses, state, pr
     records = [{"type": "ai-title", "aiTitle": title, "sessionId": sid}]
     per_prompt = max(1, responses // len(prompts))
     step = lasted / len(prompts)
+    final = CONTEXT_AT_END.get(title, 0.0) * 1_000_000 or responses * CONTEXT_PER_RESPONSE
+    sent, total = 0, per_prompt * len(prompts)
     for i, prompt in enumerate(prompts):
         t = start + i * step
         records.append({**base, "type": "user", "timestamp": iso(t), "message": {"role": "user", "content": prompt}})
@@ -153,6 +159,7 @@ def transcript(rng, sid, cwd, branch, title, start, lasted, responses, state, pr
             per_prompt //= 2  # still working: no end of turn yet
         work = min(step * 0.6, rng.uniform(2, 12) * MINUTE)
         for j in range(per_prompt):
+            sent += 1
             t_resp = t + work * (j + 1) / per_prompt
             done = j == per_prompt - 1 and not (last_turn and state in ("busy", "cut"))
             records.append({**base, "type": "assistant", "timestamp": iso(t_resp), "requestId": f"req_{uuid.UUID(int=rng.getrandbits(128))}",
@@ -161,7 +168,7 @@ def transcript(rng, sid, cwd, branch, title, start, lasted, responses, state, pr
                                         "stop_reason": "end_turn" if done else "tool_use",
                                         "content": [{"type": "text", "text": "Done."} if done
                                                     else {"type": "tool_use", "name": "Bash"}],
-                                        "usage": usage(rng)}})
+                                        "usage": usage(rng, int(final * sent / total))}})
         if last_turn and state == "cut":
             records.append({**base, "type": "user", "timestamp": iso(t + work + 5),
                             "message": {"content": [{"type": "text", "text": "[Request interrupted by user]"}]}})
@@ -171,11 +178,12 @@ def transcript(rng, sid, cwd, branch, title, start, lasted, responses, state, pr
     return records
 
 
-def usage(rng):
-    written = rng.randint(1_000, 8_000)
-    return {"input_tokens": rng.randint(2, 50), "output_tokens": rng.randint(200, 2_500),
+def usage(rng, context: int):
+    """One response with `context` tokens in its window: almost all of it read from the prompt cache."""
+    written, fresh = rng.randint(1_000, 8_000), rng.randint(2, 50)
+    return {"input_tokens": fresh, "output_tokens": rng.randint(200, 2_500),
             "cache_creation_input_tokens": written, "cache_creation": {"ephemeral_1h_input_tokens": written},
-            "cache_read_input_tokens": rng.randint(20_000, 120_000)}
+            "cache_read_input_tokens": max(context - written - fresh, 15_000)}
 
 
 def iso(ts: float) -> str:

@@ -66,6 +66,8 @@ class Session:
     first_ts: Optional[float] = None
     last_ts: Optional[float] = None
     interrupted: bool = False  # closed before Claude finished its turn
+    context: int = 0  # tokens in the context window at the last response (subagents have their own)
+    model: str = ""  # the model of that response
     usage: Usage = field(default_factory=Usage)
     # by local day "YYYY-MM-DD", so a session that spans days counts toward each of them
     daily_usage: Dict[str, Usage] = field(default_factory=dict)
@@ -123,8 +125,10 @@ def parse_session(path: Path, with_usage: bool = True) -> Session:
                     s.interrupted = left_open
             if kind == "user" and not first_prompt:
                 first_prompt = prompt_text(rec) or ""
-            elif kind == "assistant" and with_usage and _belongs(rec, s.id):
-                _add_usage(rec, s, seen)
+            elif kind == "assistant":
+                _note_context(rec, s)
+                if with_usage and _belongs(rec, s.id):
+                    _add_usage(rec, s, seen)
 
     sub_dir = path.with_suffix("") / "subagents"
     if with_usage and sub_dir.is_dir():
@@ -260,6 +264,15 @@ def _belongs(rec: dict, session_id: str) -> bool:
     # A resumed or forked session can carry records copied from the session it came from;
     # those are counted in their own session, not here.
     return rec.get("sessionId") in (None, session_id)
+
+
+def _note_context(rec: dict, s: Session) -> None:
+    msg = rec.get("message") or {}
+    usage, model = msg.get("usage"), msg.get("model")
+    if rec.get("isSidechain") or not usage or not model or model == "<synthetic>":
+        return
+    s.context = sum(usage.get(k) or 0 for k in ("input_tokens", "cache_creation_input_tokens", "cache_read_input_tokens"))
+    s.model = model
 
 
 def _add_usage(rec: dict, s: Session, seen: set) -> None:
