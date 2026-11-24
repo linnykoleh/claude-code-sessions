@@ -53,8 +53,14 @@ src="$REPO"
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]:-.}")" 2>/dev/null && pwd || true)"
 if [ -n "${BASH_SOURCE[0]:-}" ] && [ -f "$script_dir/pyproject.toml" ]; then src="$script_dir"; fi
 remove_tool "$OLD_PACKAGE"
+installed_version() { uv tool list 2>/dev/null | awk -v p="$PACKAGE" '$1 == p { sub(/^v/, "", $2); print $2 }'; }
+before="$(installed_version)"
 say "Installing ccs from $src"
 uv tool install --force --reinstall --quiet "$src"
+after="$(installed_version)"
+if [ -z "$before" ]; then say "Installed ccs $after"
+elif [ "$before" = "$after" ]; then say "ccs $after reinstalled (already the latest version)"
+else say "Upgraded ccs $before -> $after"; fi
 
 bin_dir="$(uv tool dir --bin 2>/dev/null || echo "$HOME/.local/bin")"
 case ":$PATH:" in

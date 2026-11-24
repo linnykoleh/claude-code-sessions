@@ -6,10 +6,6 @@
 
 *The demo runs on made-up sessions ([demo/make_demo.py](demo/make_demo.py)).*
 
-## Why not `claude --resume`?
-
-The built-in picker only shows sessions of the folder you are in. `ccs` shows all of them in one place, with the project, cost, duration and state of each, and opens a session from any directory.
-
 ## Install
 
 One command, on macOS or Linux:
@@ -26,8 +22,6 @@ The script installs what is missing and then the `ccs` command itself:
 | [fzf](https://github.com/junegunn/fzf) | the interactive list | `mise use -g fzf`, else Homebrew |
 | `ccs` | this tool (Python 3.9+, no other packages) | `uv tool install` |
 
-Run the same command again to upgrade.
-
 Already have uv and fzf? Install directly:
 
 ```bash
@@ -43,6 +37,23 @@ git clone https://github.com/linnykoleh/claude-code-sessions.git
 cd claude-code-sessions
 ./install.sh          # or: mise run install
 ```
+
+## Upgrade
+
+Run the install command again, the same way you installed:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/linnykoleh/claude-code-sessions/main/install.sh | bash
+# or: uv tool upgrade claude-code-sessions-cli
+# or: pipx reinstall claude-code-sessions-cli
+# or, in a clone: git pull && ./install.sh
+```
+
+The script prints the version change, for example `Upgraded ccs 0.1.0 -> 0.2.0`. `ccs --version` shows the version you have.
+
+## Why not `claude --resume`?
+
+The built-in picker only shows sessions of the folder you are in. `ccs` shows all of them in one place, with the project, cost, duration and state of each, and opens a session from any directory.
 
 ## Usage
 
