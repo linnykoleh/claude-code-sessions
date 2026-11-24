@@ -35,6 +35,7 @@ CACHE_DIR = Path(os.environ.get("XDG_CACHE_HOME", Path.home() / ".cache")) / "cc
 
 BOLD, DIM, RESET = "\033[1m", "\033[2m", "\033[0m"
 TIME_WIDTH, PROJECT_WIDTH, TITLE_WIDTH = 19, 12, 60  # the date is 16 wide; 3 more keep it apart from PROJECT
+COST_WIDTH = 9  # "$1,234.56"
 STATUS_LEGEND = {"●": "Claude is working", "○": "open, waiting for you", "!": "stopped mid-turn"}
 LIST_PROMPT, TEXT_PROMPT = "sessions> ", "text> "
 HIT = "\033[1;33m"  # search words in the preview
@@ -124,8 +125,8 @@ def search_query(words: Optional[List[str]]) -> Optional[str]:
 
 # The title goes last: when the fzf pane is narrow, only the title gets cut.
 def header_row() -> str:
-    return "\t".join([pad("LAST ACTIVITY", TIME_WIDTH), pad("PROJECT", PROJECT_WIDTH), " COST", "TIME", " CTX", " ",
-                      "TITLE"])
+    return "\t".join([pad("LAST ACTIVITY", TIME_WIDTH), pad("PROJECT", PROJECT_WIDTH), "COST".rjust(COST_WIDTH), "TIME",
+                      " CTX", " ", "TITLE"])
 
 
 def row(s: Session, prices, live: Dict[str, Live], color: bool = False) -> str:
@@ -133,7 +134,7 @@ def row(s: Session, prices, live: Dict[str, Live], color: bool = False) -> str:
     return "\t".join([
         pad(fmt_time(s.last_ts), TIME_WIDTH),
         pad(s.project, PROJECT_WIDTH),
-        (fmt_money(cost) if cost is not None else "—").rjust(5),
+        (fmt_money(cost) if cost is not None else "—").rjust(COST_WIDTH),
         fmt_duration(span(s)).rjust(4),
         ctx_cell(s, prices, color),
         status_mark(s, live),
@@ -234,13 +235,13 @@ def stats_lines(sessions: List[Session], prices, now: float) -> List[str]:
     oldest = min((local_day(s.first_ts) for s in sessions if s.first_ts), default=day(0))
     periods = [("Today", day(0)), ("Last 7 days", day(6)), ("Last 30 days", day(29)), (f"Since {oldest}", "")]
 
-    lines = [f"{'':<18}{'SESSIONS':>9}{'PROJECTS':>10}{'COST':>10}{'CLAUDE TIME':>13}"]
+    lines = [f"{'':<18}{'SESSIONS':>9}{'PROJECTS':>10}{'COST':>13}{'CLAUDE TIME':>13}"]
     for label, since in periods:
         active = [s for s in sessions if local_day(s.last_ts) >= since]
         cost = sum(_cost_since(s, prices, since) for s in active)
         work = sum(t for s in active for d, t in s.daily_work.items() if d >= since)
         projects = len({s.project for s in active})
-        lines.append(f"{label:<18}{len(active):>9,}{projects:>10,}{fmt_money(cost):>10}{fmt_total(work):>13}")
+        lines.append(f"{label:<18}{len(active):>9,}{projects:>10,}{fmt_money(cost):>13}{fmt_total(work):>13}")
 
     by_project: Dict[str, float] = {}
     for s in sessions:
@@ -256,7 +257,7 @@ def _cost_since(s: Session, prices, since: str) -> float:
 
 
 def fmt_money(dollars: float) -> str:
-    return f"${dollars:,.0f}"
+    return f"${dollars:,.2f}"
 
 
 def fmt_total(seconds: float) -> str:

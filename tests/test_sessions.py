@@ -188,7 +188,7 @@ def test_live_status_keeps_running_processes_only(tmp_path):
 def test_row_puts_title_last_and_marks_status():
     s = Session(id="a", file="f", cwd="/code/payments-api", title="Fix it", first_ts=1e9, last_ts=1e9 + 3 * 3600)
     fields = row(s, PRICES, {}).split("\t")
-    assert [f.strip() for f in fields[2:]] == ["$0", "3h", "", "", "Fix it"]  # no context known: CTX is blank
+    assert [f.strip() for f in fields[2:]] == ["$0.00", "3h", "", "", "Fix it"]  # no context known: CTX is blank
     assert row(s, PRICES, {"a": Live(pid=1, busy=True)}).split("\t")[5] == "●"
     assert row(s, PRICES, {"a": Live(pid=1, busy=False)}).split("\t")[5] == "○"
     s.interrupted = True
@@ -232,10 +232,10 @@ def test_stats_table_counts_each_period_by_the_days_it_covers():
         session("/code/old", "2026-10-01", "2026-10-01", {"2026-10-01": 50_000}, {}),
     ]
     assert stats_lines(sessions, PRICES, now) == [
-        "                   SESSIONS  PROJECTS      COST  CLAUDE TIME",
-        "Today                     2         2        $3       1h 30m",
-        "Last 7 days               2         2        $4           2h",
-        "Last 30 days              3         2        $5       2h 10m",
-        "Since 2026-10-01          4         3        $6       2h 10m",
-        "Top projects: api $3 · web $2 · old $1",
+        "                   SESSIONS  PROJECTS         COST  CLAUDE TIME",
+        "Today                     2         2        $3.00       1h 30m",
+        "Last 7 days               2         2        $4.00           2h",
+        "Last 30 days              3         2        $5.00       2h 10m",
+        "Since 2026-10-01          4         3        $6.00       2h 10m",
+        "Top projects: api $3.00 · web $2.00 · old $1.00",
     ]

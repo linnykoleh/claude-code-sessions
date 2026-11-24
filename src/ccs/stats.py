@@ -149,28 +149,28 @@ def render(sessions: List[Session], prices: Prices, today: str, weeks: int, colo
     recent = {d.day: d for d in days}
     last = [recent.get(_day(_parse(today) - i * DAY), DayStats(_day(_parse(today) - i * DAY))) for i in range(14)]
     top = max((d.cost for d in last), default=0.0)
-    out.append(paint(BOLD, f"{'LAST 14 DAYS':<16}{'SESSIONS':>9}{'COST':>9}{'CLAUDE TIME':>13}"))
+    out.append(paint(BOLD, f"{'LAST 14 DAYS':<16}{'SESSIONS':>9}{'COST':>11}{'CLAUDE TIME':>13}"))
     for d in last:
-        line = f"{_label(d.day):<16}{d.sessions or '':>9}{fmt_money(d.cost) if d.sessions else '':>9}" \
+        line = f"{_label(d.day):<16}{d.sessions or '':>9}{fmt_money(d.cost) if d.sessions else '':>11}" \
                f"{fmt_total(d.seconds) if d.seconds else '':>13}  {paint(ACCENT, hbar(d.cost, top))}"
         out.append(line.rstrip())
     out.append("")
 
     # models
     models = by_model(sessions, prices)
-    out.append(paint(BOLD, f"{'MODELS':<22}{'COST':>9}  {'SHARE':<16}{'SESSIONS':>9}{'OUTPUT':>9}{'CACHE HIT':>11}"))
+    out.append(paint(BOLD, f"{'MODELS':<22}{'COST':>11}  {'SHARE':<16}{'SESSIONS':>9}{'OUTPUT':>9}{'CACHE HIT':>11}"))
     for m in models:
         share = m.cost / total_cost if total_cost else 0.0
-        out.append(f"{m.model:<22}{fmt_money(m.cost):>9}  {paint(ACCENT, hbar(share, 1.0, 10).ljust(10))}{share:>5.0%} "
+        out.append(f"{m.model:<22}{fmt_money(m.cost):>11}  {paint(ACCENT, hbar(share, 1.0, 10).ljust(10))}{share:>5.0%} "
                    f"{m.sessions:>9}{fmt_tokens(m.output):>9}{m.cache_hit:>11.0%}")
     out.append("")
 
     # projects
     projects = by_project(sessions, prices)[:10]
     top = max((p.cost for p in projects), default=0.0)
-    out.append(paint(BOLD, f"{'PROJECTS':<22}{'SESSIONS':>9}{'COST':>9}{'CLAUDE TIME':>13}"))
+    out.append(paint(BOLD, f"{'PROJECTS':<22}{'SESSIONS':>9}{'COST':>11}{'CLAUDE TIME':>13}"))
     for p in projects:
-        out.append(f"{p.project[:21]:<22}{p.sessions:>9}{fmt_money(p.cost):>9}{fmt_total(p.seconds):>13}  "
+        out.append(f"{p.project[:21]:<22}{p.sessions:>9}{fmt_money(p.cost):>11}{fmt_total(p.seconds):>13}  "
                    f"{paint(ACCENT, hbar(p.cost, top))}")
     return out
 
