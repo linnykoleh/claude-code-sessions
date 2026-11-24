@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 from typing import Dict, List
 
@@ -49,6 +50,6 @@ def _read_cache(path: Path) -> Dict[str, dict]:
 
 def _write_cache(path: Path, entries: Dict[str, dict]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_suffix(".tmp")
+    tmp = path.with_suffix(f".{os.getpid()}.tmp")  # fzf may run two ccs at once while you type
     tmp.write_text(json.dumps({"version": CACHE_VERSION, "sessions": entries}))
     tmp.replace(path)

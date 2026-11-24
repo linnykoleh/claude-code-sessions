@@ -15,7 +15,7 @@ The built-in picker only shows sessions of the folder you are in. `ccs` shows al
 One command, on macOS or Linux:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/linnykoleh/cc-sessions/main/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/linnykoleh/claude-code-sessions/main/install.sh | bash
 ```
 
 The script installs what is missing and then the `ccs` command itself:
@@ -31,16 +31,16 @@ Run the same command again to upgrade.
 Already have uv and fzf? Install directly:
 
 ```bash
-uv tool install git+https://github.com/linnykoleh/cc-sessions
+uv tool install git+https://github.com/linnykoleh/claude-code-sessions
 # or
-pipx install git+https://github.com/linnykoleh/cc-sessions
+pipx install git+https://github.com/linnykoleh/claude-code-sessions
 ```
 
 From a clone:
 
 ```bash
-git clone https://github.com/linnykoleh/cc-sessions.git
-cd cc-sessions
+git clone https://github.com/linnykoleh/claude-code-sessions.git
+cd claude-code-sessions
 ./install.sh          # or: mise run install
 ```
 
@@ -48,6 +48,7 @@ cd cc-sessions
 
 ```bash
 ccs                 # interactive list
+ccs -s kafka lag    # only sessions that talk about both words, in text search
 ccs --list          # plain table, no fzf
 ccs --version
 ccs --help
@@ -58,6 +59,7 @@ ccs --help
 | type | filter by title, project or date |
 | ↑ ↓ | move; the preview follows |
 | Enter | resume the session in its folder (`cd <folder> && claude --resume <id>`) |
+| Ctrl-S | search inside conversations; press again to go back to the list |
 | Esc | quit |
 
 A session that is already running is not opened a second time without asking:
@@ -74,10 +76,26 @@ Search examples (fzf fuzzy search, words narrow it down):
 | `'2026-11-2` | sessions from 20–29 November 2026 (`'` = exact match) |
 | `refund retry` | sessions whose title mentions both words |
 
+### Search inside conversations
+
+Ctrl-S turns the prompt into `text>`: what you type is looked up in your prompts and in Claude's replies, not in the
+title alone. Tool calls, their output and subagents are left out, so a match is something that was said.
+
+- Every word has to occur somewhere in the session, in any case. A word matches inside longer words, so a stem finds
+  its forms: `кеш` finds `кешу` and `кешування`.
+- `"retry policy"` in quotes is one phrase.
+- The preview shows the messages that match, with the words highlighted.
+- Ctrl-S again goes back to the list; the query stays and filters the list as usual.
+
+`ccs -s WORDS` opens straight in text search, and `ccs -s WORDS --list` prints the matching sessions.
+
+The first search reads the text of all sessions (a few seconds); after that only changed sessions are read again.
+
 `--list` is handy in scripts:
 
 ```bash
 ccs --list | grep payments-api                    # all sessions of one project
+ccs -s "retry policy" --list                      # sessions that mention the phrase
 ccs --list | awk -F'\t' '$1 >= "2026-11-20"'         # sessions since 20 November
 ```
 
@@ -102,7 +120,7 @@ The line under the keys counts sessions by status.
 
 - Claude Code stores each session as `~/.claude/projects/<project>/<session-id>.jsonl`, and its subagents under `<session-id>/subagents/`. A running Claude Code registers its session in `~/.claude/sessions/<pid>.json`, which gives `●` and `○`. `ccs` reads these files and nothing else; your sessions never leave your machine.
 - Prices come from [LiteLLM's public price table](https://github.com/BerriAI/litellm/blob/main/model_prices_and_context_window.json), the same source [ccusage](https://github.com/ryoppippi/ccusage) uses. `ccs` downloads it once a week and keeps only the Claude models. Costs match ccusage within a few cents per session, except for sessions forked from another session.
-- Everything it reads is cached in `~/.cache/cc-sessions`. The first run reads all sessions (a few seconds for a few GB); after that only sessions that changed are read again.
+- Everything it reads is cached in `~/.cache/cc-sessions`: `index-v<N>.json` for the list, `text-v<N>.json` for text search. The first run reads all sessions (a few seconds for a few GB); after that only sessions that changed are read again.
 
 Settings, all optional:
 
@@ -124,8 +142,8 @@ Claude Code deletes sessions older than 30 days by default. To keep a year of th
 ## Uninstall
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/linnykoleh/cc-sessions/main/install.sh | bash -s -- --uninstall
-# or: uv tool uninstall cc-sessions && rm -rf ~/.cache/cc-sessions
+curl -fsSL https://raw.githubusercontent.com/linnykoleh/claude-code-sessions/main/install.sh | bash -s -- --uninstall
+# or: uv tool uninstall claude-code-sessions-cli && rm -rf ~/.cache/cc-sessions
 ```
 
 uv and fzf stay installed.
@@ -146,4 +164,4 @@ uv run ccs --list       # run from the checkout
 python demo/record.py   # re-record demo/ccs.svg on made-up sessions (needs tmux)
 ```
 
-The code is in `src/ccs/`: `sessions.py` reads transcripts, `pricing.py` handles prices, `index.py` the cache, `cli.py` the list and fzf, `launch.py` how a session is opened.
+The code is in `src/ccs/`: `sessions.py` reads transcripts, `pricing.py` handles prices, `index.py` the cache, `cli.py` the list and fzf, `search.py` text search, `launch.py` how a session is opened.

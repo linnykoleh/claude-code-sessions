@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Install ccs (Claude Code Sessions) with one command:
-#   curl -fsSL https://raw.githubusercontent.com/linnykoleh/cc-sessions/main/install.sh | bash
+#   curl -fsSL https://raw.githubusercontent.com/linnykoleh/claude-code-sessions/main/install.sh | bash
 # From a clone:  ./install.sh
 # Uninstall:     ./install.sh --uninstall   (or: curl ... | bash -s -- --uninstall)
 #
@@ -10,7 +10,7 @@
 # Running it again upgrades ccs to the latest version.
 set -euo pipefail
 
-REPO="${CCS_REPO:-git+https://github.com/linnykoleh/cc-sessions}"
+REPO="${CCS_REPO:-git+https://github.com/linnykoleh/claude-code-sessions}"
 
 say()  { printf '\033[1m==>\033[0m %s\n' "$*"; }
 warn() { printf '\033[33mwarning:\033[0m %s\n' "$*" >&2; }
@@ -20,10 +20,18 @@ has()  { command -v "$1" >/dev/null 2>&1; }
 # tools installed by mise are reachable through its shims
 if has mise; then export PATH="$HOME/.local/share/mise/shims:$PATH"; fi
 
-if [ "${1:-}" = "--uninstall" ]; then
-  if has uv && uv tool list 2>/dev/null | grep -q '^cc-sessions '; then
-    uv tool uninstall cc-sessions && say "Removed the ccs command"
+PACKAGE="claude-code-sessions-cli"
+OLD_PACKAGE="cc-sessions"   # the old package name; its ccs command would clash with the new one
+
+remove_tool() {   # remove_tool <package>: uninstall it if uv has it
+  if has uv && uv tool list 2>/dev/null | grep -q "^$1 "; then
+    uv tool uninstall "$1" >/dev/null 2>&1 && say "Removed $1"
   fi
+}
+
+if [ "${1:-}" = "--uninstall" ]; then
+  remove_tool "$PACKAGE"
+  remove_tool "$OLD_PACKAGE"
   rm -rf "${XDG_CACHE_HOME:-$HOME/.cache}/cc-sessions" && say "Removed the cache"
   say "uv and fzf were left installed."
   exit 0
@@ -44,6 +52,7 @@ ensure fzf fzf@latest fzf "https://github.com/junegunn/fzf"
 src="$REPO"
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]:-.}")" 2>/dev/null && pwd || true)"
 if [ -n "${BASH_SOURCE[0]:-}" ] && [ -f "$script_dir/pyproject.toml" ]; then src="$script_dir"; fi
+remove_tool "$OLD_PACKAGE"
 say "Installing ccs from $src"
 uv tool install --force --reinstall --quiet "$src"
 

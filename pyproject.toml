@@ -1,5 +1,5 @@
 [project]
-name = "cc-sessions"
+name = "claude-code-sessions-cli"
 version = "0.1.0"
 description = "ccs: browse and resume every Claude Code session across all your projects"
 readme = "README.md"

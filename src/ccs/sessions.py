@@ -139,11 +139,27 @@ def parse_session(path: Path, with_usage: bool = True) -> Session:
 
 def prompts(path: Path) -> Iterator[Tuple[Optional[float], str]]:
     """(timestamp, text) of every prompt you typed in a session."""
+    for ts, who, text in messages(path):
+        if who == "you":
+            yield ts, text
+
+
+def messages(path: Path) -> Iterator[Tuple[Optional[float], str, str]]:
+    """(timestamp, "you" or "claude", text) of what you typed and what Claude wrote back:
+    no thinking, tool calls, tool output or subagents."""
     for rec in _records(path):
-        if rec.get("type") == "user":
+        kind = rec.get("type")
+        if rec.get("isSidechain") or kind not in ("user", "assistant"):
+            continue
+        if kind == "user":
             text = prompt_text(rec)
-            if text:
-                yield parse_ts(rec.get("timestamp")), text
+        else:
+            content = (rec.get("message") or {}).get("content")
+            blocks = content if isinstance(content, list) else []
+            text = "\n".join(b["text"] for b in blocks
+                             if isinstance(b, dict) and b.get("type") == "text" and isinstance(b.get("text"), str))
+        if text and text.strip():
+            yield parse_ts(rec.get("timestamp")), "you" if kind == "user" else "claude", text
 
 
 def prompt_text(rec: dict) -> Optional[str]:
