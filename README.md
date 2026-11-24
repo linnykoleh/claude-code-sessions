@@ -4,12 +4,21 @@
 
 ```
 sessions>
-  Enter: resume · Ctrl-Y: copy resume command · Esc: quit
-  LAST ACTIVITY     PROJECT          TITLE                                        COST  TIME
-> 2026-11-24 14:23  payments-api     Fix retry logic in the refund worker          $12    3h
-  2026-11-24 11:05  infra            Terraform plan for the new region              $3   40m
-  2026-11-23 18:40  payments-api     Add idempotency keys to webhooks              $27    1d
-  2026-11-22 09:12  docs             Rewrite the onboarding guide                   $1   12m
+                     SESSIONS  PROJECTS      COST  CLAUDE TIME
+  Today                     4         2       $43       2h 45m
+  Last 7 days              31         6      $304       12h 4m
+  Last 30 days            112        14    $1,658      51h 52m
+  Since 2026-10-22        130        15    $2,037       68h 1m
+  Top projects: payments-api $788 · infra $418 · docs $156
+
+  Enter: resume · Esc: quit
+  ● 1 Claude is working · ○ 1 open, waiting for you · ! 1 stopped mid-turn
+
+  LAST ACTIVITY       PROJECT             COST TIME   TITLE
+> 2026-11-24 14:23    payments-api         $12   3h ● Fix retry logic in the refund worker
+  2026-11-24 11:05    infra                 $3  40m ○ Terraform plan for the new region
+  2026-11-23 18:40    payments-api         $27   1d ! Add idempotency keys to webhooks
+  2026-11-22 09:12    docs                  $1  12m   Rewrite the onboarding guide
 ```
 
 The preview pane on the right shows the selected session:
@@ -27,7 +36,7 @@ Fix retry logic in the refund worker
 
 ## Why not `claude --resume`?
 
-The built-in picker only shows sessions of the folder you are in. `ccs` shows all of them in one place, with the project, cost and duration of each, and opens a session from any directory.
+The built-in picker only shows sessions of the folder you are in. `ccs` shows all of them in one place, with the project, cost, duration and state of each, and opens a session from any directory.
 
 ## Install
 
@@ -77,7 +86,6 @@ ccs --help
 | type | filter by title, project or date |
 | ↑ ↓ | move; the preview follows |
 | Enter | resume the session in its folder (`cd <folder> && claude --resume <id>`) |
-| Ctrl-Y | copy that command to the clipboard |
 | Esc | quit |
 
 Search examples (fzf fuzzy search, words narrow it down):
@@ -95,19 +103,26 @@ ccs --list | grep payments-api                    # all sessions of one project
 ccs --list | awk -F'\t' '$1 >= "2026-11-20"'         # sessions since 20 November
 ```
 
+### Statistics
+
+The table on top sums your sessions for today, the last 7 days, the last 30 days and everything `ccs` can see. A session counts in a period if you worked in it then. COST and CLAUDE TIME count only what was spent in the period, by the day of each message, so a session started yesterday and continued today adds only today's part to Today. CLAUDE TIME is how long Claude worked on its turns, not how long the session was open. Top projects are the three that cost the most overall.
+
+The line under the keys counts sessions by status.
+
 ### Columns
 
 | Column | Meaning |
 |---|---|
 | LAST ACTIVITY | time of the last message, local time |
 | PROJECT | the folder the session ran in |
-| TITLE | the name you gave it with `/rename`, else Claude's title, else your first prompt |
 | COST | what the tokens would cost at Anthropic API list prices, subagents included. On a subscription this is not what you pay; it shows how much work went into the session |
 | TIME | from the first to the last message |
+| (status) | `●` Claude is working in it right now; `○` it is open in a terminal and waits for you; `!` it was closed before Claude finished its turn: you pressed Esc, declined a tool, or your last prompt got no answer. Blank: closed after Claude answered |
+| TITLE | the name you gave it with `/rename`, else Claude's title, else your first prompt. It comes last, so a narrow window cuts only the title |
 
 ## How it works
 
-- Claude Code stores each session as `~/.claude/projects/<project>/<session-id>.jsonl`, and its subagents under `<session-id>/subagents/`. `ccs` reads these files and nothing else; your sessions never leave your machine.
+- Claude Code stores each session as `~/.claude/projects/<project>/<session-id>.jsonl`, and its subagents under `<session-id>/subagents/`. A running Claude Code registers its session in `~/.claude/sessions/<pid>.json`, which gives `●` and `○`. `ccs` reads these files and nothing else; your sessions never leave your machine.
 - Prices come from [LiteLLM's public price table](https://github.com/BerriAI/litellm/blob/main/model_prices_and_context_window.json), the same source [ccusage](https://github.com/ryoppippi/ccusage) uses. `ccs` downloads it once a week and keeps only the Claude models. Costs match ccusage within a few cents per session, except for sessions forked from another session.
 - Everything it reads is cached in `~/.cache/cc-sessions`. The first run reads all sessions (a few seconds for a few GB); after that only sessions that changed are read again.
 

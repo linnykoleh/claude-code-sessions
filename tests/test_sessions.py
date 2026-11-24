@@ -3,9 +3,9 @@ from pathlib import Path
 
 import pytest
 
-from ccs.cli import fmt_duration, pad, resume_command
+from ccs.cli import fmt_duration, pad, row, stats_lines
 from ccs.index import load_sessions
-from ccs.sessions import parse_session, prompts
+from ccs.sessions import Session, Usage, live_status, parse_session, prompts
 
 PRICES = {
     "claude-opus-5-5": {
@@ -26,9 +26,15 @@ def user(text, ts, **extra):
             "gitBranch": "PAY-512-fix", "message": {"role": "user", "content": text}, **extra}
 
 
-def assistant(msg_id, ts, usage, session_id=SID, request_id="req_1"):
+def assistant(msg_id, ts, usage=None, session_id=SID, request_id="req_1", stop="end_turn", content=()):
     return {"type": "assistant", "sessionId": session_id, "timestamp": ts, "requestId": request_id,
-            "message": {"id": msg_id, "model": "claude-opus-5-5", "usage": usage}}
+            "message": {"id": msg_id, "model": "claude-opus-5-5", "usage": usage or {}, "stop_reason": stop,
+                        "content": list(content)}}
+
+
+def tool_result(ts):
+    return {"type": "user", "sessionId": SID, "timestamp": ts,
+            "message": {"content": [{"type": "tool_result", "content": "ok"}]}}
 
 
 USAGE = {"input_tokens": 10, "output_tokens": 100, "cache_creation_input_tokens": 1000,
@@ -123,4 +129,92 @@ def test_formatting_helpers():
     assert fmt_duration(2 * 86400) == "2d"
     assert pad("abcdef", 4) == "abc…"
     assert pad("ab", 4) == "ab  "
-    assert resume_command("/my dir", "abc") == "cd '/my dir' && claude --resume abc"
+
+
+T0, T1, T2, T3 = (f"2026-11-20T10:00:0{i}Z" for i in range(4))
+BASH = {"type": "tool_use", "name": "Bash"}
+
+
+@pytest.mark.parametrize("ending, interrupted", [
+    ([assistant("m1", T1)], False),                                   # Claude answered
+    ([assistant("m1", T1, stop="tool_use", content=[BASH]), tool_result(T2),
+      assistant("m2", T3)], False),                                   # answered after using a tool
+    ([assistant("m1", T1), user("<command-name>/exit</command-name>", T2)], False),  # commands do not count
+    ([assistant("m1", T1, stop="tool_use", content=[BASH]), tool_result(T2)], True),  # closed mid-tool
+    ([assistant("m1", T1, stop="tool_use", content=[BASH]),
+      {**tool_result(T2), "message": {"content": [{"type": "text", "text": "[Request interrupted by user]"}]}}],
+     True),                                                           # Esc
+    ([assistant("m1", T1), user("and now?", T2)], True),              # prompt never answered
+    ([assistant("m1", T1, stop="tool_use", content=[{"type": "tool_use", "name": "StructuredOutput"}]),
+      tool_result(T2)], False),                                       # claude -p --json-schema finished
+])
+def test_interrupted_when_the_last_turn_did_not_finish(projects, ending, interrupted):
+    f = make_session(projects, [user("go", T0), *ending])
+    assert parse_session(f).interrupted is interrupted
+
+
+def test_live_status_keeps_running_processes_only(tmp_path):
+    import os, subprocess, sys
+    dead = subprocess.Popen([sys.executable, "-c", ""])
+    dead.wait()
+    (tmp_path / "1.json").write_text(json.dumps({"pid": os.getpid(), "sessionId": "a", "status": "busy"}))
+    (tmp_path / "2.json").write_text(json.dumps({"pid": dead.pid, "sessionId": "b", "status": "idle"}))
+    (tmp_path / "3.json").write_text("not json")
+    assert live_status(tmp_path) == {"a": "busy"}
+    assert live_status(tmp_path / "missing") == {}
+
+
+def test_row_puts_title_last_and_marks_status():
+    s = Session(id="a", file="f", cwd="/code/payments-api", title="Fix it", first_ts=1e9, last_ts=1e9 + 3 * 3600)
+    fields = row(s, PRICES, {}).split("\t")
+    assert [f.strip() for f in fields[2:]] == ["$0", "3h", "", "Fix it"]
+    assert row(s, PRICES, {"a": "busy"}).split("\t")[4] == "●"
+    assert row(s, PRICES, {"a": "idle"}).split("\t")[4] == "○"
+    s.interrupted = True
+    assert row(s, PRICES, {}).split("\t")[4] == "!"
+
+
+
+def test_usage_and_claude_time_are_split_by_day(projects):
+    f = make_session(projects, [
+        user("go", "2026-11-20T10:00:00"),
+        assistant("m1", "2026-11-20T10:00:05", {"output_tokens": 100}, request_id="r1"),
+        {"type": "system", "subtype": "turn_duration", "durationMs": 90_000, "timestamp": "2026-11-20T10:01:30"},
+        user("more", "2026-11-21T09:00:00"),
+        assistant("m2", "2026-11-21T09:00:05", {"output_tokens": 300}, request_id="r2"),
+        {"type": "system", "subtype": "turn_duration", "durationMs": 30_000, "timestamp": "2026-11-21T09:00:30"},
+    ])
+    s = parse_session(f)
+    assert {d: u.tokens["claude-opus-5-5"]["output"] for d, u in s.daily_usage.items()} == {
+        "2026-11-20": 100, "2026-11-21": 300}
+    assert s.daily_work == {"2026-11-20": 90.0, "2026-11-21": 30.0}
+
+
+def test_stats_table_counts_each_period_by_the_days_it_covers():
+    import time
+    now = time.mktime((2026, 11, 24, 15, 0, 0, 0, 0, -1))
+
+    def session(cwd, first, last, usage, work):
+        s = Session(id=cwd, file="f", cwd=cwd,
+                    first_ts=time.mktime(time.strptime(first, "%Y-%m-%d")) + 3600,
+                    last_ts=time.mktime(time.strptime(last, "%Y-%m-%d")) + 3600)
+        for day, output_tokens in usage.items():  # 50k output tokens = $1
+            s.daily_usage.setdefault(day, Usage()).add("claude-opus-5-5", {"output_tokens": output_tokens})
+        s.daily_work = work
+        return s
+
+    sessions = [
+        session("/code/api", "2026-11-24", "2026-11-24", {"2026-11-24": 100_000}, {"2026-11-24": 3600}),
+        session("/code/web", "2026-11-23", "2026-11-24", {"2026-11-23": 50_000, "2026-11-24": 50_000},
+                {"2026-11-23": 1800, "2026-11-24": 1800}),
+        session("/code/api", "2026-11-10", "2026-11-10", {"2026-11-10": 50_000}, {"2026-11-10": 600}),
+        session("/code/old", "2026-10-01", "2026-10-01", {"2026-10-01": 50_000}, {}),
+    ]
+    assert stats_lines(sessions, PRICES, now) == [
+        "                   SESSIONS  PROJECTS      COST  CLAUDE TIME",
+        "Today                     2         2        $3       1h 30m",
+        "Last 7 days               2         2        $4           2h",
+        "Last 30 days              3         2        $5       2h 10m",
+        "Since 2026-10-01          4         3        $6       2h 10m",
+        "Top projects: api $3 · web $2 · old $1",
+    ]
