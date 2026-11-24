@@ -60,6 +60,12 @@ ccs --help
 | Enter | resume the session in its folder (`cd <folder> && claude --resume <id>`) |
 | Esc | quit |
 
+A session that is already running is not opened a second time without asking:
+
+- A background session (`claude --bg`) is attached with `claude attach <id>`.
+- A session open in another terminal or an IDE (`●` or `○`): `ccs` says where it is open (pid and terminal) and asks
+  whether to open a copy (`claude --resume <id> --fork-session`) or to resume it anyway. Enter cancels.
+
 Search examples (fzf fuzzy search, words narrow it down):
 
 | Type | Finds |
@@ -140,4 +146,4 @@ uv run ccs --list       # run from the checkout
 python demo/record.py   # re-record demo/ccs.svg on made-up sessions (needs tmux)
 ```
 
-The code is in `src/ccs/`: `sessions.py` reads transcripts, `pricing.py` handles prices, `index.py` the cache, `cli.py` the list and fzf.
+The code is in `src/ccs/`: `sessions.py` reads transcripts, `pricing.py` handles prices, `index.py` the cache, `cli.py` the list and fzf, `launch.py` how a session is opened.

@@ -4,8 +4,8 @@ from pathlib import Path
 import pytest
 
 from ccs.cli import fmt_duration, pad, row, stats_lines
-from ccs.index import load_sessions
-from ccs.sessions import Session, Usage, live_status, parse_session, prompts
+from ccs.index import CACHE_VERSION, load_sessions
+from ccs.sessions import Live, Session, Usage, live_status, parse_session, prompts
 
 PRICES = {
     "claude-opus-5-5": {
@@ -116,11 +116,24 @@ def test_index_is_newest_first_and_reuses_cache(projects, tmp_path):
     assert [s.id for s in load_sessions(projects, cache)] == ["new", "old"]
 
     # the cached entry is used as long as the transcript is unchanged
-    index = json.loads((cache / "index.json").read_text())
+    index_file = cache / f"index-v{CACHE_VERSION}.json"
+    index = json.loads(index_file.read_text())
     entry = next(v for k, v in index["sessions"].items() if k.endswith("old.jsonl"))
     entry["session"]["title"] = "from cache"
-    (cache / "index.json").write_text(json.dumps(index))
+    index_file.write_text(json.dumps(index))
     assert {s.id: s.title for s in load_sessions(projects, cache)}["old"] == "from cache"
+
+
+def test_each_cache_version_has_its_own_file(projects, tmp_path):
+    """Two installed versions of ccs must not wipe each other's cache: that made every run re-read all sessions."""
+    make_session(projects, [user("hi", "2026-11-01T10:00:00Z")], name="a")
+    cache = tmp_path / "cache"
+    cache.mkdir()
+    other = cache / f"index-v{CACHE_VERSION - 1}.json"
+    other.write_text('{"version": 0, "sessions": {}}')
+    load_sessions(projects, cache)
+    assert other.read_text() == '{"version": 0, "sessions": {}}'
+    assert (cache / f"index-v{CACHE_VERSION}.json").exists()
 
 
 def test_formatting_helpers():
@@ -160,7 +173,15 @@ def test_live_status_keeps_running_processes_only(tmp_path):
     (tmp_path / "1.json").write_text(json.dumps({"pid": os.getpid(), "sessionId": "a", "status": "busy"}))
     (tmp_path / "2.json").write_text(json.dumps({"pid": dead.pid, "sessionId": "b", "status": "idle"}))
     (tmp_path / "3.json").write_text("not json")
-    assert live_status(tmp_path) == {"a": "busy"}
+    (tmp_path / "4.json").write_text(json.dumps(
+        {"pid": os.getpid(), "sessionId": "c", "status": "idle", "kind": "bg", "jobId": "c0ffee12"}))
+    (tmp_path / "5.json").write_text(json.dumps(
+        {"pid": os.getpid(), "sessionId": "d", "status": "idle", "kind": "interactive", "jobId": "ignored"}))
+    assert live_status(tmp_path) == {
+        "a": Live(pid=os.getpid(), busy=True),
+        "c": Live(pid=os.getpid(), busy=False, job_id="c0ffee12"),
+        "d": Live(pid=os.getpid(), busy=False),
+    }
     assert live_status(tmp_path / "missing") == {}
 
 
@@ -168,8 +189,8 @@ def test_row_puts_title_last_and_marks_status():
     s = Session(id="a", file="f", cwd="/code/payments-api", title="Fix it", first_ts=1e9, last_ts=1e9 + 3 * 3600)
     fields = row(s, PRICES, {}).split("\t")
     assert [f.strip() for f in fields[2:]] == ["$0", "3h", "", "Fix it"]
-    assert row(s, PRICES, {"a": "busy"}).split("\t")[4] == "●"
-    assert row(s, PRICES, {"a": "idle"}).split("\t")[4] == "○"
+    assert row(s, PRICES, {"a": Live(pid=1, busy=True)}).split("\t")[4] == "●"
+    assert row(s, PRICES, {"a": Live(pid=1, busy=False)}).split("\t")[4] == "○"
     s.interrupted = True
     assert row(s, PRICES, {}).split("\t")[4] == "!"
 

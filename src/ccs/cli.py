@@ -18,8 +18,9 @@ from typing import Dict, List, Optional
 
 from ccs import __version__
 from ccs.index import load_sessions
+from ccs.launch import resume_command
 from ccs.pricing import load_prices
-from ccs.sessions import Session, live_status, local_day, parse_session, prompts
+from ccs.sessions import Live, Session, live_status, local_day, parse_session, prompts
 
 CLAUDE_DIR = Path(os.environ.get("CLAUDE_CONFIG_DIR", Path.home() / ".claude"))
 PROJECTS_DIR = CLAUDE_DIR / "projects"
@@ -64,7 +65,7 @@ def header_row() -> str:
     return "\t".join([pad("LAST ACTIVITY", TIME_WIDTH), pad("PROJECT", PROJECT_WIDTH), " COST", "TIME", " ", "TITLE"])
 
 
-def row(s: Session, prices, live: Dict[str, str]) -> str:
+def row(s: Session, prices, live: Dict[str, Live]) -> str:
     cost = s.usage.cost(prices)
     return "\t".join([
         pad(fmt_time(s.last_ts), TIME_WIDTH),
@@ -76,13 +77,13 @@ def row(s: Session, prices, live: Dict[str, str]) -> str:
     ])
 
 
-def status_mark(s: Session, live: Dict[str, str]) -> str:
+def status_mark(s: Session, live: Dict[str, Live]) -> str:
     if s.id in live:
-        return "●" if live[s.id] == "busy" else "○"
+        return "●" if live[s.id].busy else "○"
     return "!" if s.interrupted else " "
 
 
-def legend(sessions: List[Session], live: Dict[str, str]) -> str:
+def legend(sessions: List[Session], live: Dict[str, Live]) -> str:
     """The status marks with how many sessions have each: "● 1 Claude is working · …"."""
     marks = [status_mark(s, live) for s in sessions]
     return " · ".join(f"{mark} {marks.count(mark)} {meaning}" for mark, meaning in STATUS_LEGEND.items())
@@ -159,7 +160,7 @@ def fmt_duration(seconds: float) -> str:
 
 # --- interactive picker ---
 
-def pick(sessions: List[Session], prices, live: Dict[str, str]) -> int:
+def pick(sessions: List[Session], prices, live: Dict[str, Live]) -> int:
     fzf = os.environ.get("FZF") or shutil.which("fzf")
     if not fzf:
         print("ccs: fzf is required (https://github.com/junegunn/fzf). Use --list for a plain list.", file=sys.stderr)
@@ -187,9 +188,13 @@ def pick(sessions: List[Session], prices, live: Dict[str, str]) -> int:
     if not os.path.isdir(cwd):
         print(f"Folder {cwd} no longer exists. Session ID: {session_id}", file=sys.stderr)
         return 1
+    argv = resume_command(session_id, live_status(LIVE_DIR).get(session_id))  # now, not when the list was made
+    if argv is None:
+        return 0
     os.chdir(cwd)
-    os.execvp("claude", ["claude", "--resume", session_id])
+    os.execvp(argv[0], argv)
     return 0  # not reached
+
 
 
 def print_preview(path: Path) -> None:

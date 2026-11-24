@@ -153,9 +153,17 @@ def prompt_text(rec: dict) -> Optional[str]:
     return None
 
 
-def live_status(sessions_dir: Path) -> Dict[str, str]:
-    """{session id: "busy" or "idle"} of the sessions open in a running Claude Code."""
-    live: Dict[str, str] = {}
+@dataclass(frozen=True)
+class Live:
+    """A running Claude Code that has a session open."""
+    pid: int
+    busy: bool  # Claude is working on a turn; else it waits for you
+    job_id: Optional[str] = None  # only for a background session (`claude --bg`): what `claude attach` takes
+
+
+def live_status(sessions_dir: Path) -> Dict[str, Live]:
+    """{session id: Live} of the sessions open in a running Claude Code."""
+    live: Dict[str, Live] = {}
     for path in sessions_dir.glob("*.json"):
         try:
             data = json.loads(path.read_text())
@@ -163,7 +171,8 @@ def live_status(sessions_dir: Path) -> Dict[str, str]:
         except (OSError, ValueError, KeyError, TypeError):
             continue
         if _is_running(pid):  # a crashed Claude Code leaves its file behind
-            live[session_id] = "busy" if data.get("status") == "busy" else "idle"
+            job_id = data.get("jobId") if data.get("kind") == "bg" else None
+            live[session_id] = Live(pid=pid, busy=data.get("status") == "busy", job_id=job_id or None)
     return live
 
 

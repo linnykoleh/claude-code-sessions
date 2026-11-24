@@ -13,7 +13,7 @@ CACHE_VERSION = 5
 
 def load_sessions(projects_dir: Path, cache_dir: Path) -> List[Session]:
     """All sessions, newest first."""
-    cache_file = cache_dir / "index.json"
+    cache_file = cache_dir / f"index-v{CACHE_VERSION}.json"  # per version: two installed versions keep their own
     cached = _read_cache(cache_file)
     entries: Dict[str, dict] = {}
     sessions: List[Session] = []
