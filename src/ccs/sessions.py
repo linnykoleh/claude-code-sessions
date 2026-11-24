@@ -169,6 +169,29 @@ def prompt_text(rec: dict) -> Optional[str]:
     return None
 
 
+def rename_session(path: Path, session_id: str, name: str) -> None:
+    """Name the session the way `/rename` does: a custom-title and an agent-name record at the end of the transcript
+    and `<id>/custom-title.json` next to it. The transcript keeps its mtime, so Claude's own picker keeps its order."""
+    st = path.stat()
+    records = [{"type": "custom-title", "customTitle": name, "sessionId": session_id},
+               {"type": "agent-name", "agentName": name, "sessionId": session_id}]
+    text = "".join(json.dumps(r, ensure_ascii=False, separators=(",", ":")) + "\n" for r in records)
+    with path.open("rb") as f:
+        if st.st_size:
+            f.seek(-1, os.SEEK_END)
+            if f.read(1) != b"\n":
+                text = "\n" + text  # finish the last line first, or the two would be glued into one
+    with path.open("a", encoding="utf-8") as f:
+        f.write(text)  # one write, so a line is never split
+    os.utime(path, ns=(st.st_atime_ns, st.st_mtime_ns))
+
+    side_dir = path.with_suffix("")
+    side_dir.mkdir(exist_ok=True)
+    fd = os.open(side_dir / "custom-title.json", os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "w", encoding="utf-8") as f:
+        f.write(json.dumps({"customTitle": name}, ensure_ascii=False, separators=(",", ":")))
+
+
 @dataclass(frozen=True)
 class Live:
     """A running Claude Code that has a session open."""

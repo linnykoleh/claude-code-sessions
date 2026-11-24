@@ -3,6 +3,7 @@
   Enter   resume the session in its project folder (claude --resume <id>)
   Type    to filter by title, project or date
   Ctrl-S  switch to searching inside conversations (your prompts and Claude's replies) and back
+  Ctrl-R  rename the session, as /rename does
 """
 
 from __future__ import annotations
@@ -19,10 +20,10 @@ from typing import Dict, List, Optional
 
 from ccs import __version__
 from ccs.index import load_sessions
-from ccs.launch import resume_command
+from ccs.launch import ask_tty, resume_command, where
 from ccs.search import highlight, query_words, search, snippets
 from ccs.pricing import load_prices
-from ccs.sessions import Live, Session, live_status, local_day, parse_session, prompts
+from ccs.sessions import Live, Session, live_status, local_day, parse_session, prompts, rename_session
 
 CLAUDE_DIR = Path(os.environ.get("CLAUDE_CONFIG_DIR", Path.home() / ".claude"))
 PROJECTS_DIR = CLAUDE_DIR / "projects"
@@ -40,7 +41,8 @@ def main(argv: Optional[List[str]] = None) -> int:
     parser = argparse.ArgumentParser(
         prog="ccs",
         description="Browse and resume every Claude Code session across all your projects (newest first).",
-        epilog="Keys: Enter resumes the session in its folder, Ctrl-S searches inside conversations, Esc quits.",
+        epilog="Keys: Enter resumes the session in its folder, Ctrl-S searches inside conversations, "
+               "Ctrl-R renames the session, Esc quits.",
     )
     parser.add_argument("-s", "--search", nargs="+", metavar="WORD",
                         help='only sessions whose prompts, replies or title contain every word; "two words" is a phrase')
@@ -50,6 +52,8 @@ def main(argv: Optional[List[str]] = None) -> int:
     parser.add_argument("--find", metavar="QUERY", help=argparse.SUPPRESS)  # with --preview: show the hits
     parser.add_argument("--rows", metavar="QUERY", help=argparse.SUPPRESS)  # fzf reload in text search
     parser.add_argument("--switch", action="store_true", help=argparse.SUPPRESS)  # fzf Ctrl-S
+    parser.add_argument("--rename", nargs=2, metavar=("ID", "FILE"), help=argparse.SUPPRESS)  # fzf Ctrl-R
+    parser.add_argument("--refresh", action="store_true", help=argparse.SUPPRESS)  # fzf reload in either mode
     args = parser.parse_args(argv)
 
     if args.preview:
@@ -58,10 +62,15 @@ def main(argv: Optional[List[str]] = None) -> int:
     if args.switch:
         print(switch_actions(os.environ.get("FZF_PROMPT", ""), me_command()))
         return 0
+    if args.rename:
+        session_id, path = args.rename
+        return rename(Path(path), session_id, live_status(LIVE_DIR).get(session_id))
 
     sessions = load_sessions(PROJECTS_DIR, CACHE_DIR)
     prices = load_prices(CACHE_DIR)
     live = live_status(LIVE_DIR)
+    if args.refresh:
+        args.rows = refresh_query()
     query = args.rows if args.rows is not None else search_query(args.search)
     if args.rows is not None:
         print("\n".join(fzf_lines(search(sessions, query, CACHE_DIR), prices, live)))
@@ -183,6 +192,25 @@ def fmt_duration(seconds: float) -> str:
 
 # --- interactive picker ---
 
+def refresh_query() -> str:
+    """The text-search query to reload with: the one typed in text search; none in the list, which filters itself."""
+    return os.environ.get("FZF_QUERY", "") if os.environ.get("FZF_PROMPT") == TEXT_PROMPT else ""
+
+
+def rename(path: Path, session_id: str, live: Optional[Live], ask=None) -> int:
+    """Ctrl-R: ask for a new name on the terminal and write it the way /rename does."""
+    ask = ask or ask_tty
+    if live is not None:
+        ask(f"This session is open in a running Claude ({where(live)}), which would write its old name back.\n"
+            "Rename it there with /rename. Press Enter to go back. ")
+        return 1
+    current = parse_session(path, with_usage=False).title
+    name = " ".join(ask(f'New name (Enter keeps "{current}"): ').split())
+    if name and name != current:
+        rename_session(path, session_id, name)
+    return 0
+
+
 def me_command() -> str:
     return f"{shlex.quote(sys.executable)} -m ccs"
 
@@ -212,7 +240,7 @@ def pick(sessions: List[Session], prices, live: Dict[str, Live], query: Optional
     me = me_command()
     table, *rows, top = stats_lines(sessions, prices, time.time())
     stats = "\n".join([f"{DIM}{table}{RESET}", *rows, f"{DIM}{top}{RESET}"])
-    keys = "Enter: resume · Ctrl-S: search inside conversations · Esc: quit"
+    keys = "Enter: resume · Ctrl-S: search inside conversations · Ctrl-R: rename · Esc: quit"
     header = f"{stats}\n\n{keys}\n{legend(sessions, live)}\n "  # blank lines set the parts apart
     cmd = [
         fzf, "--ansi", "--layout=reverse", "--header-lines=1", "--delimiter=\t", "--with-nth=1..6",
@@ -221,6 +249,7 @@ def pick(sessions: List[Session], prices, live: Dict[str, Live], query: Optional
         f"--header={header}", "--preview-window=right,50%,wrap",
         f"--bind=ctrl-s:transform:{me} --switch",
         f"--bind=change:reload:{me} --rows {{q}}",
+        f"--bind=ctrl-r:execute({me} --rename {{9}} {{7}})+reload({me} --refresh)",
     ]
     if query is None:
         shown = sessions

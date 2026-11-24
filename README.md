@@ -60,6 +60,7 @@ ccs --help
 | ↑ ↓ | move; the preview follows |
 | Enter | resume the session in its folder (`cd <folder> && claude --resume <id>`) |
 | Ctrl-S | search inside conversations; press again to go back to the list |
+| Ctrl-R | rename the session; Claude Code's own `/resume` shows the new name too |
 | Esc | quit |
 
 A session that is already running is not opened a second time without asking:
@@ -75,6 +76,10 @@ Search examples (fzf fuzzy search, words narrow it down):
 | `payments` | sessions in the `payments-api` project |
 | `'2026-11-2` | sessions from 20–29 November 2026 (`'` = exact match) |
 | `refund retry` | sessions whose title mentions both words |
+
+Ctrl-R writes the name the way `/rename` does and keeps the session's place in Claude Code's own list. A session
+that is open in a running Claude is not renamed, because that Claude would write its old name back: use `/rename`
+there.
 
 ### Search inside conversations
 

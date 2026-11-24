@@ -23,6 +23,7 @@ def resume_command(session_id: str, live: Optional[Live],
         "  r  resume it anyway\n"
         "  Enter  cancel\n> "
     )
+    answer = answer.strip().lower()
     if answer == "c":
         return ["claude", "--resume", session_id, "--fork-session"]
     if answer == "r":
@@ -41,7 +42,7 @@ def ask_tty(question: str) -> str:
         with open("/dev/tty", "w") as out, open("/dev/tty") as keyboard:
             out.write(question)
             out.flush()
-            return keyboard.readline().strip().lower()
+            return keyboard.readline().strip()
     except OSError:
         return ""  # no terminal: cancel
 
