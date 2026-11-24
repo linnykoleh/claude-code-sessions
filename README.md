@@ -50,6 +50,7 @@ cd claude-code-sessions
 ccs                 # interactive list
 ccs -s kafka lag    # only sessions that talk about both words, in text search
 ccs --list          # plain table, no fzf
+ccs stats           # activity heatmap, last 14 days, models, projects
 ccs --version
 ccs --help
 ```
@@ -61,6 +62,7 @@ ccs --help
 | Enter | resume the session in its folder (`cd <folder> && claude --resume <id>`) |
 | Ctrl-S | search inside conversations; press again to go back to the list |
 | Ctrl-R | rename the session; Claude Code's own `/resume` shows the new name too |
+| Ctrl-T | statistics full screen (`ccs stats`); arrows scroll, `q` goes back to the list |
 | Esc | quit |
 
 A session that is already running is not opened a second time without asking:
@@ -109,6 +111,20 @@ ccs --list | awk -F'\t' '$1 >= "2026-11-20"'         # sessions since 20 Novembe
 The table on top sums your sessions for today, the last 7 days, the last 30 days and everything `ccs` can see. A session counts in a period if you worked in it then. COST and CLAUDE TIME count only what was spent in the period, by the day of each message, so a session started yesterday and continued today adds only today's part to Today. CLAUDE TIME is how long Claude worked on its turns, not how long the session was open. Top projects are the three that cost the most overall.
 
 The line under the keys counts sessions by status.
+
+### `ccs stats`
+
+How you work with Claude, from the same cache as the list (instant after the first run):
+
+- **Activity**: a GitHub-style heatmap of Claude's working time per day, weeks as columns, Monday on top; four greens
+  by quartile of your active days. Below it: active days, the busiest day and the current streak. It covers the weeks
+  Claude Code still keeps (see [Keep more history](#keep-more-history)), at most `--weeks` (26 by default).
+- **Last 14 days**: sessions, cost and Claude time per day, with a bar by cost.
+- **Models**: cost and share, sessions, output tokens and how much of the input came from the prompt cache.
+- **Projects**: the ten most expensive, with sessions, cost and Claude time.
+
+Claude time adds up across sessions that run at the same time, so a busy day can show more than 24 hours.
+`ccs stats --json` prints days, models, projects and totals for scripts.
 
 ### Columns
 

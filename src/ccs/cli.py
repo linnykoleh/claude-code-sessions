@@ -4,6 +4,9 @@
   Type    to filter by title, project or date
   Ctrl-S  switch to searching inside conversations (your prompts and Claude's replies) and back
   Ctrl-R  rename the session, as /rename does
+  Ctrl-T  statistics (q goes back)
+
+ccs stats [--json] [--weeks N]   activity heatmap, last 14 days, models and projects
 """
 
 from __future__ import annotations
@@ -31,7 +34,7 @@ LIVE_DIR = CLAUDE_DIR / "sessions"
 CACHE_DIR = Path(os.environ.get("XDG_CACHE_HOME", Path.home() / ".cache")) / "cc-sessions"
 
 BOLD, DIM, RESET = "\033[1m", "\033[2m", "\033[0m"
-TIME_WIDTH, PROJECT_WIDTH, TITLE_WIDTH = 19, 18, 60  # the date is 16 wide; 3 more keep it apart from PROJECT
+TIME_WIDTH, PROJECT_WIDTH, TITLE_WIDTH = 19, 12, 60  # the date is 16 wide; 3 more keep it apart from PROJECT
 STATUS_LEGEND = {"●": "Claude is working", "○": "open, waiting for you", "!": "stopped mid-turn"}
 LIST_PROMPT, TEXT_PROMPT = "sessions> ", "text> "
 HIT = "\033[1;33m"  # search words in the preview
@@ -42,11 +45,15 @@ FILE_FIELD, CWD_FIELD, ID_FIELD = 8, 9, 10
 
 
 def main(argv: Optional[List[str]] = None) -> int:
+    argv = sys.argv[1:] if argv is None else argv
+    if argv[:1] == ["stats"]:
+        return stats_main(argv[1:])
     parser = argparse.ArgumentParser(
         prog="ccs",
         description="Browse and resume every Claude Code session across all your projects (newest first).",
         epilog="Keys: Enter resumes the session in its folder, Ctrl-S searches inside conversations, "
-               "Ctrl-R renames the session, Esc quits.",
+               "Ctrl-R renames the session, Ctrl-T shows statistics, Esc quits. "
+               "`ccs stats` prints the statistics.",
     )
     parser.add_argument("-s", "--search", nargs="+", metavar="WORD",
                         help='only sessions whose prompts, replies or title contain every word; "two words" is a phrase')
@@ -85,6 +92,25 @@ def main(argv: Optional[List[str]] = None) -> int:
             print(row(s, prices, live))
         return 0
     return pick(sessions, prices, live, query)
+
+
+def stats_main(argv: List[str]) -> int:
+    from ccs import stats  # it uses this module's formatting
+
+    parser = argparse.ArgumentParser(prog="ccs stats", description="How you work with Claude: an activity heatmap, "
+                                     "the last 14 days, models and projects.")
+    parser.add_argument("--json", action="store_true", help="print the numbers as JSON")
+    parser.add_argument("--weeks", type=int, default=26, metavar="N", help="weeks in the heatmap (default 26)")
+    parser.add_argument("--color", action="store_true", help="colours even when the output is not a terminal")
+    args = parser.parse_args(argv)
+    sessions, prices = load_sessions(PROJECTS_DIR, CACHE_DIR), load_prices(CACHE_DIR)
+    if args.json:
+        print(stats.as_json(sessions, prices))
+        return 0
+    lines = stats.render(sessions, prices, today=local_day(time.time()), weeks=max(1, args.weeks),
+                         color=args.color or sys.stdout.isatty())
+    print("\n".join(lines))
+    return 0
 
 
 def search_query(words: Optional[List[str]]) -> Optional[str]:
@@ -297,7 +323,7 @@ def pick(sessions: List[Session], prices, live: Dict[str, Live], query: Optional
     me = me_command()
     table, *rows, top = stats_lines(sessions, prices, time.time())
     stats = "\n".join([f"{DIM}{table}{RESET}", *rows, f"{DIM}{top}{RESET}"])
-    keys = "Enter: resume · Ctrl-S: search inside conversations · Ctrl-R: rename · Esc: quit"
+    keys = "Enter: resume · Ctrl-S: search inside conversations · Ctrl-R: rename · Ctrl-T: stats · Esc: quit"
     header = f"{stats}\n\n{keys}\n{legend(sessions, live)}\n "  # blank lines set the parts apart
     cmd = [
         fzf, "--ansi", "--layout=reverse", "--header-lines=1", "--delimiter=\t", f"--with-nth=1..{FILE_FIELD - 1}",
@@ -307,6 +333,7 @@ def pick(sessions: List[Session], prices, live: Dict[str, Live], query: Optional
         f"--bind=ctrl-s:transform:{me} --switch",
         f"--bind=change:reload:{me} --rows {{q}}",
         f"--bind=ctrl-r:execute({me} --rename {{{ID_FIELD}}} {{{FILE_FIELD}}})+reload({me} --refresh)",
+        f"--bind=ctrl-t:execute({me} stats --color | less -R)",  # full screen; q in less goes back to the list
     ]
     if query is None:
         shown = sessions
