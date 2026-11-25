@@ -52,7 +52,14 @@ def snippets(path: Path, words: List[str], limit: int = 40) -> List[Tuple[Option
         at = min((i for i in (lower.find(w) for w in words) if i >= 0), default=-1)
         if at < 0:
             continue
-        start, end = max(0, at - SNIPPET_CONTEXT), at + SNIPPET_CONTEXT * 2
+        hit_end = at + max(len(w) for w in words if lower.startswith(w, at))
+        start, end = max(0, at - SNIPPET_CONTEXT), max(hit_end, at + SNIPPET_CONTEXT * 2)
+        if start and flat[start - 1] != " ":  # begin and end on whole words, unless one word is longer than that
+            space = flat.find(" ", start, at)
+            start = space + 1 if space >= 0 else start
+        if end < len(flat) and flat[end] != " ":
+            space = flat.rfind(" ", hit_end, end)
+            end = space if space >= 0 else end
         hits.append((ts, who, ("…" if start else "") + flat[start:end] + ("…" if end < len(flat) else "")))
         if len(hits) == limit:
             break

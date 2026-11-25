@@ -1,5 +1,6 @@
 import json
 import os
+import re
 import subprocess
 import time
 from pathlib import Path
@@ -186,3 +187,40 @@ def test_preview_shows_the_hits_or_your_prompts_when_only_the_title_or_project_m
     assert f"{cli.HIT}retry{cli.RESET}" in body(["retry"]) and "refund worker" not in body(["retry"])
     assert "Fix the refund worker" in body(["api"]) and "retry" not in body(["api"])  # the project matched
     assert "Fix the refund worker" in body([])
+
+
+def test_snippets_start_and_end_on_whole_words(projects):
+    reply = "alpha " * 30 + "the retry policy" + " omega" * 40
+    f = transcript(projects, "a", [claude(text(reply))])
+    ((_, _, snippet),) = snippets(f, ["retry"])
+    assert snippet.startswith("…") and snippet.endswith("…")
+    assert set(snippet.strip("…").split()) <= {"alpha", "the", "retry", "policy", "omega"}
+
+
+def preview_body(path, words, capsys):
+    cli.print_preview(path, words)
+    body = capsys.readouterr().out.split("\n\n", 1)[1]  # what comes after the title, folder and id
+    return [re.sub(r"\x1b\[[0-9;]*m", "", line) for line in body.rstrip("\n").split("\n")]
+
+
+@pytest.mark.parametrize("words", [[], ["tooling"]])
+def test_preview_wraps_messages_at_spaces_under_their_text(words, projects, tmp_path, monkeypatch, capsys):
+    monkeypatch.setenv("CCS_OFFLINE", "1")
+    monkeypatch.setenv("FZF_PREVIEW_COLUMNS", "50")
+    monkeypatch.setattr(cli, "CACHE_DIR", tmp_path / "cache")
+    prompt = "The CDN team develops deploy verification and its other AI tooling in the CDN AI hub"
+    lines = preview_body(transcript(projects, "a", [you(prompt)]), words, capsys)
+    col = lines[0].index("The CDN")
+    assert len(lines) > 2 and all(cli.cells(line) <= 50 for line in lines)
+    assert all(not line[:col].strip() and line[col] != " " for line in lines[1:])  # each line goes on under the text
+    assert " ".join(line[col:] for line in lines) == prompt                         # no word is cut
+
+
+def test_preview_cuts_a_long_prompt_after_a_whole_word(projects, tmp_path, monkeypatch, capsys):
+    monkeypatch.setenv("CCS_OFFLINE", "1")
+    monkeypatch.setenv("FZF_PREVIEW_COLUMNS", "80")
+    monkeypatch.setattr(cli, "CACHE_DIR", tmp_path / "cache")
+    lines = preview_body(transcript(projects, "a", [you("abcdefg " * 60)]), [], capsys)
+    col = lines[0].index("abcdefg")
+    shown = " ".join(line[col:] for line in lines)
+    assert shown.endswith("abcdefg…") and set(shown.rstrip("…").split()) == {"abcdefg"}

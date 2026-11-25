@@ -40,6 +40,7 @@ STATUS_LEGEND = {"●": "Claude is working", "○": "open, waiting for you", "!"
 HIT = "\033[1;33m"  # search words in the preview
 GREEN, YELLOW, RED = "\033[32m", "\033[33m", "\033[31m"
 BAR_WIDTH, EIGHTHS = 20, " ▏▎▍▌▋▊▉"
+PROMPT_CELLS = 300  # of each prompt in the preview; longer ones end in …
 # fzf fields: the 7 visible columns, then hidden ones the bindings use
 FILE_FIELD, CWD_FIELD, ID_FIELD = 8, 9, 10
 
@@ -192,6 +193,26 @@ def split_at_width(text: str, width: int) -> Tuple[str, str]:
             at = space if space > 0 else i
             return text[:at], text[at:].lstrip()
     return text, ""
+
+
+def wrap(text: str, width: int) -> List[str]:
+    """`text` in lines of at most `width` cells, broken at spaces; only a word longer than a line is cut."""
+    lines = []
+    while True:
+        line, text = split_at_width(text, width)
+        if not line:  # not even one character fits
+            line, text = text[:1], text[1:]
+        lines.append(line)
+        if not text:
+            return lines
+
+
+def message_lines(head: str, text: str, width: int, words: Optional[List[str]] = None) -> List[str]:
+    """`head` (time, who) dim, then `text` wrapped at spaces, each line going on under the text's first word."""
+    indent = cells(head)
+    lines = wrap(text, max(width - indent, 20))
+    return [(f"{DIM}{head}{RESET}" if i == 0 else " " * indent) + highlight(line, words or [], HIT, RESET)
+            for i, line in enumerate(lines)]
 
 
 def cells(text: str) -> int:
@@ -394,14 +415,16 @@ def print_preview(path: Path, words: Optional[List[str]] = None) -> None:
     for line in usage_lines(s, load_prices(CACHE_DIR)):
         print(line)
     print()
+    width = preview_width()
     hits = snippets(path, words) if words else []
     for ts, who, snippet in hits:
-        label = "you   " if who == "you" else "Claude"
-        print(f"{DIM}{fmt_time(ts)} {label}{RESET}  {highlight(snippet, words, HIT, RESET)}")
+        who = "you   " if who == "you" else "Claude"
+        print("\n".join(message_lines(f"{fmt_time(ts)} {who}  ", snippet, width, words)))
     if hits:
         return
     for i, (ts, text) in enumerate(prompts(path)):  # nothing typed, or only the title, project, branch or date matched
         if i == 40:
             print(f"{DIM}…{RESET}")
             break
-        print(f"{DIM}{fmt_time(ts)}{RESET}  {' '.join(text.split())[:300]}")
+        shown, rest = split_at_width(" ".join(text.split()), PROMPT_CELLS)
+        print("\n".join(message_lines(f"{fmt_time(ts)}  ", shown + ("…" if rest else ""), width)))
