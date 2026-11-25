@@ -263,10 +263,10 @@ def test_stats_table_counts_each_period_by_the_days_it_covers():
         session("/code/old", "2026-10-01", "2026-10-01", {"2026-10-01": 50_000}, {}),
     ]
     assert stats_lines(sessions, PRICES, now) == [
-        "                   SESSIONS  PROJECTS         COST  CLAUDE TIME",
-        "Today                     2         2        $3.00       1h 30m",
-        "Last 7 days               2         2        $4.00           2h",
-        "Last 30 days              3         2        $5.00       2h 10m",
-        "Since 2026-10-01          4         3        $6.00       2h 10m",
+        "                         SESSIONS  PROJECTS         COST  CLAUDE TIME",
+        "Today                           2         2        $3.00       1h 30m",
+        "Last 7 days                     2         2        $4.00           2h",
+        "Last 30 days                    3         2        $5.00       2h 10m",
+        "All (since 2026-10-01)          4         3        $6.00       2h 10m",
         "Top projects: api $3.00 · web $2.00 · old $1.00",
     ]

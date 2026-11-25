@@ -115,7 +115,7 @@ ccs --list | awk -F'\t' '$1 >= "2026-11-20"'         # sessions since 20 Novembe
 
 ### Statistics
 
-The table on top sums your sessions for today, the last 7 days, the last 30 days and everything `ccs` can see. A session counts in a period if you worked in it then. COST and CLAUDE TIME count only what was spent in the period, by the day of each message, so a session started yesterday and continued today adds only today's part to Today. CLAUDE TIME is how long Claude worked on its turns, not how long the session was open. Top projects are the three that cost the most overall.
+The table on top sums your sessions for today, the last 7 days, the last 30 days and everything `ccs` can see. The last row, All, is dated by your oldest session: Claude Code deletes sessions older than `cleanupPeriodDays` in `~/.claude/settings.json` (30 days by default), so raise it to keep a longer history. A session counts in a period if you worked in it then. COST and CLAUDE TIME count only what was spent in the period, by the day of each message, so a session started yesterday and continued today adds only today's part to Today. CLAUDE TIME is how long Claude worked on its turns, not how long the session was open. Top projects are the three that cost the most overall.
 
 The line under the keys counts sessions by status.
 

@@ -264,15 +264,15 @@ def stats_lines(sessions: List[Session], prices, now: float) -> List[str]:
         return local_day(time.mktime(today[:2] + (today[2] - days_back, 12, 0, 0, 0, 0, -1)))
 
     oldest = min((local_day(s.first_ts) for s in sessions if s.first_ts), default=day(0))
-    periods = [("Today", day(0)), ("Last 7 days", day(6)), ("Last 30 days", day(29)), (f"Since {oldest}", "")]
+    periods = [("Today", day(0)), ("Last 7 days", day(6)), ("Last 30 days", day(29)), (f"All (since {oldest})", "")]
 
-    lines = [f"{'':<18}{'SESSIONS':>9}{'PROJECTS':>10}{'COST':>13}{'CLAUDE TIME':>13}"]
+    lines = [f"{'':<24}{'SESSIONS':>9}{'PROJECTS':>10}{'COST':>13}{'CLAUDE TIME':>13}"]
     for label, since in periods:
         active = [s for s in sessions if local_day(s.last_ts) >= since]
         cost = sum(_cost_since(s, prices, since) for s in active)
         work = sum(t for s in active for d, t in s.daily_work.items() if d >= since)
         projects = len({s.project for s in active})
-        lines.append(f"{label:<18}{len(active):>9,}{projects:>10,}{fmt_money(cost):>13}{fmt_total(work):>13}")
+        lines.append(f"{label:<24}{len(active):>9,}{projects:>10,}{fmt_money(cost):>13}{fmt_total(work):>13}")
 
     by_project: Dict[str, float] = {}
     for s in sessions:
