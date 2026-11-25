@@ -258,9 +258,7 @@ def test_with_fzf_0_74_5_or_later_the_list_reloads_itself_on_a_timer(ccs_dirs, f
     assert on_timer[0] == pause and on_timer[1].startswith("reload-sync(") and on_timer[1].endswith(" --tick)")
     # fzf cuts a reload short when the next one starts, and a list whose reloads never finish never changes:
     # every reload pauses the timer, and the timer comes back once the list has loaded
-    # then the footer shows the usage limits that reload read
-    assert bindings(cmd, "load")[0] == f"rebind({timer})"
-    assert [x for x in bindings(cmd, "load")[1:] if not x.startswith("transform-footer(cat ")] == []
+    assert bindings(cmd, "load") == [f"rebind({timer})"]
     change, ctrl_r = bindings(cmd, "change"), bindings(cmd, "ctrl-r")
     assert change[0] == pause and ctrl_r[0] == pause
     assert [a for a in ctrl_r if a.startswith("reload")][0].startswith("reload-sync(")

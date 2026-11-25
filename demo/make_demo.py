@@ -6,7 +6,7 @@
 Every project, title, prompt and path here is made up. Times are relative to now, so the
 "Today" and "Last 7 days" rows always have something in them. Three sessions are shown as open
 in Claude Code: each gets a `sleep` process to stand in for a running Claude (they exit after
---live-seconds). The usage limits under the list come from a made-up status line snapshot.
+--live-seconds).
 """
 
 from __future__ import annotations
@@ -127,13 +127,10 @@ def main() -> None:
     cache_dir.mkdir(parents=True)
     (cache_dir / "prices-v3.json").write_text(json.dumps(PRICES))
     (claude_dir / "sessions").mkdir(parents=True)
-    now = time.time()
-    (cache_dir / "limits.json").write_text(json.dumps({"saved": now, "rate_limits": {  # as a status line saves them
-        "five_hour": {"used_percentage": 42, "resets_at": now + 2 * 3600 + 15 * 60},
-        "seven_day": {"used_percentage": 61, "resets_at": now + 3 * 86400 + 6 * 3600}}}))
 
     rng = random.Random(42)
     edits = random.Random(7)  # a generator of its own, so the edits leave the rest of the demo as it was
+    now = time.time()
     for project, branch, title, ago, lasted, responses, state, prompts in SESSIONS:
         sid = str(uuid.UUID(int=rng.getrandbits(128), version=4))
         cwd = f"{HOME}/{project}"

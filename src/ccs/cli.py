@@ -8,6 +8,7 @@
 from __future__ import annotations
 
 import argparse
+import math
 import os
 import re
 import shlex
@@ -19,12 +20,11 @@ import tempfile
 import time
 import unicodedata
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, NamedTuple, Optional, Tuple
 
 from ccs import __version__
 from ccs.index import load_sessions
 from ccs.launch import ask_tty, resume_command, where
-from ccs.limits import WINDOWS, read_limits, save_limits, window
 from ccs.search import highlight, query_words, search, snippets
 from ccs.pricing import context_window, load_prices
 from ccs.sessions import Live, Session, live_status, local_day, parse_session, prompts, rename_session
@@ -33,15 +33,17 @@ CLAUDE_DIR = Path(os.environ.get("CLAUDE_CONFIG_DIR", Path.home() / ".claude"))
 PROJECTS_DIR = CLAUDE_DIR / "projects"
 LIVE_DIR = CLAUDE_DIR / "sessions"
 CACHE_DIR = Path(os.environ.get("XDG_CACHE_HOME", Path.home() / ".cache")) / "cc-sessions"
-LIMITS_NAME = "limits.json"  # in CACHE_DIR; the status line writes it (see limits.py)
 
 BOLD, DIM, RESET = "\033[1m", "\033[2m", "\033[0m"
-TIME_WIDTH, PROJECT_WIDTH, TITLE_WIDTH = 19, 12, 60  # the date is 16 wide; 3 more keep it apart from PROJECT
-COST_WIDTH = 14  # "$1,234.56" is 9 wide; 5 more keep it apart from PROJECT
+TIME_WIDTH, TITLE_WIDTH = 19, 60  # the date is 16 wide; 3 more keep it apart from PROJECT
+# PROJECT fits the names of PROJECT_SHARE of the sessions, within these bounds, so a few sessions of a project with a
+# long name do not push COST away for all the others; a narrow terminal takes it down to PROJECT_MIN so that TITLE
+# keeps TITLE_MIN. COST is as wide as the largest cost, with COST_GAP in front of it.
+PROJECT_MIN, PROJECT_MAX, TITLE_MIN, COST_GAP = 12, 28, 20, 3
+PROJECT_SHARE = 0.95
 HIT = "\033[1;33m"  # search words in the preview
 GREEN, YELLOW, RED = "\033[32m", "\033[33m", "\033[31m"
 BRIGHT_GREEN, LIGHT_BLUE, PINK = "\033[38;5;41m", "\033[38;5;75m", "\033[1;38;5;213m"
-LINE_GREY = "\033[38;5;59m"  # fzf's own colour for its borders and scrollbar
 # What a session is doing, in the order the legend lists the states; the names are what the legend says.
 WORKING, NEEDS_YOU, WAITING, STOPPED, CLOSED = (
     "working", "needs you", "waiting", "stopped mid-turn", "closed")
@@ -54,7 +56,6 @@ LIVE_FZF = (0, 74, 5)
 STATUS_MARKS = {WORKING: SPINNER[0], NEEDS_YOU: "◉", WAITING: "○", STOPPED: "!", CLOSED: " "}
 STATUS_COLORS = {WORKING: BRIGHT_GREEN, NEEDS_YOU: PINK, WAITING: LIGHT_BLUE, STOPPED: RED, CLOSED: ""}
 BAR_WIDTH, EIGHTHS = 20, " ▏▎▍▌▋▊▉"
-LIMIT_BAR_WIDTH = 13  # both limits fit in one line of the list's half of a 160-column terminal
 PROMPT_CELLS = 300  # of each prompt in the preview; longer ones end in …
 # fzf fields: the 7 visible columns, then hidden ones the bindings use
 FILE_FIELD, CWD_FIELD, ID_FIELD = 8, 9, 10
@@ -72,8 +73,6 @@ def main(argv: Optional[List[str]] = None) -> int:
                         help="only sessions that have every word in their title, project, branch, date, prompts or "
                              'replies; "two words" is a phrase')
     parser.add_argument("--list", action="store_true", help="print the session list without fzf")
-    parser.add_argument("--save-limits", action="store_true",
-                        help="read a status line's JSON on stdin and keep Claude's usage limits for the list to show")
     parser.add_argument("--version", action="version", version=f"ccs {__version__}")
     parser.add_argument("--preview", metavar="FILE", help=argparse.SUPPRESS)
     parser.add_argument("--find", metavar="QUERY", help=argparse.SUPPRESS)  # with --preview: show the hits
@@ -83,9 +82,6 @@ def main(argv: Optional[List[str]] = None) -> int:
     parser.add_argument("--rename", nargs=2, metavar=("ID", "FILE"), help=argparse.SUPPRESS)  # fzf Ctrl-R
     args = parser.parse_args(argv)
 
-    if args.save_limits:
-        save_limits(sys.stdin.read(), CACHE_DIR / LIMITS_NAME, time.time())
-        return 0  # a status line without limits (an API key, not a plan) is not an error
     if args.preview:
         print_preview(Path(args.preview), query_words(args.find or ""))
         return 0
@@ -99,15 +95,15 @@ def main(argv: Optional[List[str]] = None) -> int:
     live = live_status(LIVE_DIR)
     if args.rows is not None:
         shown = listed(sessions, args.rows, Path(args.state) if args.state else None, args.tick, max_age)
-        if args.state:  # the footer shows it after this reload (see fzf_command)
-            write_text(Path(args.state) / "limits", limits_footer(footer_width(os.environ)))
-        print("\n".join(fzf_lines(shown, prices, live, spinner_frame())))
+        cols = columns(sessions, prices, list_width(os.environ))
+        print("\n".join(fzf_lines(shown, prices, live, cols, spinner_frame())))
         return 0
     query = search_query(args.search)
     if args.list:
-        print(header_row())
+        cols = columns(sessions, prices)
+        print(header_row(cols))
         for s in search(sessions, query or "", CACHE_DIR):
-            print(row(s, prices, live))
+            print(row(s, prices, live, cols))
         return 0
     return pick(sessions, prices, live, query)
 
@@ -139,12 +135,8 @@ def read_ids(path: Path) -> Optional[List[str]]:
 
 
 def write_ids(path: Path, ids: List[str]) -> None:
-    write_text(path, "\n".join(ids))
-
-
-def write_text(path: Path, text: str) -> None:
     tmp = path.with_suffix(f".{os.getpid()}.tmp")  # whole or not at all: fzf kills a reload it no longer needs
-    tmp.write_text(text)
+    tmp.write_text("\n".join(ids))
     tmp.replace(path)
 
 
@@ -158,17 +150,55 @@ def search_query(words: Optional[List[str]]) -> Optional[str]:
 # --- list rows ---
 
 # The title goes last: when the fzf pane is narrow, only the title gets cut.
-def header_row() -> str:
-    return "\t".join([pad("LAST ACTIVITY", TIME_WIDTH), pad("PROJECT", PROJECT_WIDTH), "COST".rjust(COST_WIDTH), "TIME",
-                      " CTX", " ", "TITLE"])
+class Columns(NamedTuple):
+    project: int = PROJECT_MIN
+    cost: int = len("$1,234.56")
 
 
-def row(s: Session, prices, live: Dict[str, Live], color: bool = False, frame: int = 0) -> str:
+# What a row takes besides PROJECT, COST and TITLE: the date, the tabs (one cell each with --tabstop=1), TIME, CTX
+# and the status mark.
+ROW_FRAME = TIME_WIDTH + 1 + 1 + COST_GAP + 1 + 4 + 1 + 4 + 1 + 1 + 1
+
+
+def columns(sessions: List[Session], prices, width: Optional[int] = None) -> Columns:
+    """PROJECT as wide as the names of nearly all sessions and COST as the largest cost. A name is cut when it is
+    longer than that, beyond PROJECT_MAX, or when a list `width` cells wide would leave TITLE less than TITLE_MIN."""
+    cost = max([len("COST")] + [len(cost_text(s, prices)) for s in sessions])
+    names = sorted(len(s.project) for s in sessions)
+    most = names[max(0, math.ceil(len(names) * PROJECT_SHARE) - 1)] if names else 0
+    project = min(max(len("PROJECT"), most), PROJECT_MAX)
+    if width is not None:
+        project = min(project, width - ROW_FRAME - cost - TITLE_MIN)
+    return Columns(max(project, PROJECT_MIN), cost)
+
+
+def list_width(env) -> int:
+    """Cells the list's rows have, from fzf's sizes in a reload; before fzf runs, from the terminal: the preview takes
+    half of it less 4, and its borders and padding, the pointer and the scrollbar 7 more (measured in fzf 0.75)."""
+    try:
+        total, preview = int(env["FZF_COLUMNS"]), int(env["FZF_PREVIEW_COLUMNS"])
+    except (KeyError, ValueError):
+        total = shutil.get_terminal_size().columns
+        preview = total // 2 - 4
+    return total - preview - 7
+
+
+def header_row(cols: Columns = Columns()) -> str:
+    return "\t".join([pad("LAST ACTIVITY", TIME_WIDTH), pad("PROJECT", cols.project),
+                      "COST".rjust(COST_GAP + cols.cost), "TIME", " CTX", " ", "TITLE"])
+
+
+def cost_text(s: Session, prices) -> str:
     cost = s.usage.cost(prices)
+    return fmt_money(cost) if cost is not None else "—"
+
+
+def row(s: Session, prices, live: Dict[str, Live], cols: Columns = Columns(), color: bool = False,
+        frame: int = 0) -> str:
     return "\t".join([
         pad(fmt_time(s.last_ts), TIME_WIDTH),
-        pad(s.project, PROJECT_WIDTH),
-        (fmt_money(cost) if cost is not None else "—").rjust(COST_WIDTH),
+        pad(s.project, cols.project),
+        cost_text(s, prices).rjust(COST_GAP + cols.cost),
         fmt_duration(span(s)).rjust(4),
         ctx_cell(s, prices, color),
         status_mark(status(s, live), frame, color),
@@ -196,12 +226,12 @@ def fill_color(share: float) -> str:
     return GREEN if share < 0.5 else YELLOW if share < 0.8 else RED
 
 
-def bar(share: float, color: str, width: int = BAR_WIDTH) -> str:
-    """A bar `width` cells wide, precise to an eighth of a cell; the empty part dim."""
-    eighths = int(share * width * 8)
+def bar(share: float, color: str) -> str:
+    """A bar BAR_WIDTH cells wide, precise to an eighth of a cell; the empty part dim."""
+    eighths = int(share * BAR_WIDTH * 8)
     full, part = divmod(eighths, 8)
     filled = "█" * full + (EIGHTHS[part] if part else "")
-    return f"{color}{filled}{RESET}{DIM}{'░' * (width - len(filled))}{RESET}"
+    return f"{color}{filled}{RESET}{DIM}{'░' * (BAR_WIDTH - len(filled))}{RESET}"
 
 
 def title_lines(s: Session, width: int) -> List[str]:
@@ -358,66 +388,6 @@ def stats_lines(sessions: List[Session], prices, now: float) -> List[str]:
     return lines
 
 
-def limits_line(snapshot: Optional[dict], now: float) -> str:
-    """Claude's 5-hour and weekly limits in one line, "" without a snapshot:
-    "5h ██▌░░░░░░░░░░ 19% · resets 2h 53m   Week ████▏░░░░░░░░ 32% · resets 3d 5h"."""
-    if not snapshot:
-        return ""
-    parts = []
-    for key, label in WINDOWS:
-        w = window(snapshot["rate_limits"], key, now)
-        if w is None:
-            continue
-        if w["used"] is None:
-            parts.append(f"{label} {DIM}reset, shows after Claude's next reply{RESET}")
-            continue
-        share, color = w["used"] / 100, fill_color(w["used"] / 100)
-        until = f" · resets {fmt_span(w['resets_in'])}" if w["resets_in"] is not None else ""
-        parts.append(f"{label} {bar(share, color, LIMIT_BAR_WIDTH)} {color}{w['used']:.0f}%{RESET}{until}")
-    return "   ".join(parts)
-
-
-def limits_label(snapshot: Optional[dict], now: float) -> str:
-    """The section's title; an old snapshot says how old, since the line itself has no room left for it."""
-    age = now - ((snapshot or {}).get("saved") or now)
-    return f" Usage limits · as of {fmt_span(age)} ago " if age >= 60 else " Usage limits "
-
-
-def limits_footer(width: int) -> str:
-    """The section under the list, `width` cells wide: a blank line apart from the rows, the title on a rule that runs
-    to the scrollbar's column, then the limits with a blank line above and below. Nothing without limits."""
-    snapshot, now = read_limits(CACHE_DIR / LIMITS_NAME), time.time()
-    line = limits_line(snapshot, now)
-    if not line:
-        return ""
-    title = limits_label(snapshot, now)
-    rule = f"{LINE_GREY}─{title}{'─' * max(0, width - 1 - len(title))}{RESET}"
-    return f"\n{rule}\n\n{line}\n "  # fzf drops a last line that is empty, not one with a space
-
-
-def footer_width(env) -> int:
-    """Cells from where fzf starts the footer to the scrollbar's column. A reload gets fzf's own sizes; the list's
-    first frame, before fzf runs, works them out from the terminal: the preview takes half of it, less 4."""
-    try:
-        columns, preview = int(env["FZF_COLUMNS"]), int(env["FZF_PREVIEW_COLUMNS"])
-    except (KeyError, ValueError):
-        columns = shutil.get_terminal_size().columns
-        preview = columns // 2 - 4
-    return columns - preview - FOOTER_FRAME
-
-
-def fmt_span(seconds: float) -> str:
-    """53m, 2h 53m, 3d 5h: the two largest units."""
-    minutes = int(seconds // 60)
-    days, minutes = divmod(minutes, 1440)
-    hours, minutes = divmod(minutes, 60)
-    if days:
-        return f"{days}d {hours}h" if hours else f"{days}d"
-    if hours:
-        return f"{hours}h {minutes}m" if minutes else f"{hours}h"
-    return f"{minutes}m"
-
-
 def _cost_since(s: Session, prices, since: str) -> float:
     """Cost of the days from `since` on; models without a known price count as 0."""
     return sum(u.cost(prices) or 0.0 for d, u in s.daily_usage.items() if d >= since)
@@ -473,19 +443,15 @@ def fzf_version(fzf: str) -> Tuple[int, ...]:
 
 
 FZF_HEADER_LINES = 3  # the legend, a blank line, the column titles: fzf reads them again with each reload
-FOOTER_FZF = (0, 63)  # --footer, where the usage limits stay pinned under the list
-SCROLL_OFF = 5  # rows the cursor keeps below it, so it never has to go down to the limits
-FOOTER_FRAME = 7  # the footer's indent (2), the preview's borders and padding (4), the scrollbar's column (1)
 
 
-def fzf_lines(sessions: List[Session], prices, live: Dict[str, Live], frame: int = 0) -> List[str]:
-    return [legend(sessions, live, frame, color=True), "", header_row()] + [
-        f"{row(s, prices, live, color=True, frame=frame)}\t{s.file}\t{s.cwd}\t{s.id}" for s in sessions]
+def fzf_lines(sessions: List[Session], prices, live: Dict[str, Live], cols: Columns = Columns(),
+              frame: int = 0) -> List[str]:
+    return [legend(sessions, live, frame, color=True), "", header_row(cols)] + [
+        f"{row(s, prices, live, cols, color=True, frame=frame)}\t{s.file}\t{s.cwd}\t{s.id}" for s in sessions]
 
 
-def fzf_command(fzf: str, header: str, state: Path, query: Optional[str], live_list: bool,
-                limits: Optional[str] = None) -> List[str]:
-    """`limits` None: this fzf has no footer; else the footer's first text, which a live list keeps current."""
+def fzf_command(fzf: str, header: str, state: Path, query: Optional[str], live_list: bool) -> List[str]:
     me = me_command()
     rows_cmd = f"{me} --rows {{q}} --state {shlex.quote(str(state))}"
     preview_cmd = f"{me} --preview {{{FILE_FIELD}}} --find {{q}}"
@@ -498,12 +464,7 @@ def fzf_command(fzf: str, header: str, state: Path, query: Optional[str], live_l
         "--preview-window=right,50%,wrap,noinfo",  # no scroll position over the lines added and removed
         # fzf's own filter sees only the row; ccs also looks at what was said, so it does the searching
         "--disabled",
-        f"--scroll-off={SCROLL_OFF}",
     ]
-    if limits is not None:
-        # Claude's usage limits are the account's, not a session's: a section of their own, pinned under the list.
-        # fzf's own border would sit right against the rows, so the section draws its title and spacing itself.
-        cmd += [f"--footer={limits}", "--footer-border=none"]
     if live_list:
         # The list reloads itself on a timer, so statuses stay true and the working mark turns. fzf cuts a reload
         # short when the next one starts, and a list whose reloads never finish never changes: each reload pauses
@@ -517,10 +478,7 @@ def fzf_command(fzf: str, header: str, state: Path, query: Optional[str], live_l
         pause, preview = f"unbind({timer})", f"preview({preview_cmd})"
         cmd += [
             "--no-preview", "--no-track",
-            f"--bind={timer}:{pause}+reload-sync({rows_cmd} --tick)",
-            # each reload leaves the limits it read in the state folder; cat is cheap next to a second ccs
-            f"--bind=load:rebind({timer})" + (f"+transform-footer(cat {shlex.quote(str(state / 'limits'))})"
-                                               if limits is not None else ""),
+            f"--bind={timer}:{pause}+reload-sync({rows_cmd} --tick)", f"--bind=load:rebind({timer})",
             f"--id-nth={ID_FIELD}", f"--bind=focus:{preview}",
             f"--bind=change:{pause}+reload({rows_cmd})+{preview}",
             f"--bind=ctrl-r:{pause}+execute({rename_cmd})+reload-sync({rows_cmd})+{preview}",
@@ -560,16 +518,14 @@ def pick(sessions: List[Session], prices, live: Dict[str, Live], query: Optional
     keys = "Type to search · Enter: resume · Ctrl-R: rename · Esc: quit"
     header = f"{stats}\n\n{keys}"  # a blank line sets the parts apart
     shown = search(sessions, query or "", CACHE_DIR)
-    lines = fzf_lines(shown, prices, live, spinner_frame())
-    version = fzf_version(fzf)
-    live_list = version >= LIVE_FZF
-    limits = limits_footer(footer_width({})) if version >= FOOTER_FZF else None
+    lines = fzf_lines(shown, prices, live, columns(sessions, prices, list_width({})), spinner_frame())
+    live_list = fzf_version(fzf) >= LIVE_FZF
     state = Path(tempfile.mkdtemp(prefix="ccs-"))  # what the open list shows, for its reloads (see listed)
     hang_up = signal.signal(signal.SIGHUP, _hang_up)  # a closed terminal tab still removes the state
     try:
         write_ids(state / "order", [s.id for s in sessions])
         write_ids(state / "shown", [s.id for s in shown])
-        result = subprocess.run(fzf_command(fzf, header, state, query, live_list, limits), input="\n".join(lines),
+        result = subprocess.run(fzf_command(fzf, header, state, query, live_list), input="\n".join(lines),
                                 stdout=subprocess.PIPE, text=True)
     finally:
         signal.signal(signal.SIGHUP, hang_up)

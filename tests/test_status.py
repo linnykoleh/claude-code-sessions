@@ -90,12 +90,55 @@ def test_every_reload_gives_fzf_the_legend_and_the_spinner_of_that_moment(tmp_pa
 
 
 def test_project_and_cost_stay_apart_even_when_both_are_as_wide_as_they_get():
-    """fzf shows a tab as one space (--tabstop=1); the COST column adds five more in front of the widest cost."""
+    """fzf shows a tab as one space (--tabstop=1); the COST column adds three more in front of the widest cost."""
     s = Session(id="a", file="f", cwd="/code/data-pipelines", title="t", first_ts=1e9, last_ts=1e9)
     prices = {"claude-opus-5-5": {"input": 1.0, "output": 0.0, "cache_write": 0.0, "cache_write_1h": 0.0,
                                   "cache_read": 0.0}}
     s.usage.add("claude-opus-5-5", {"input_tokens": 1234.56})
     line = cli.row(s, prices, {}).replace("\t", " ")
-    assert re.search(r"data-pipeli… {6}\$1,234\.56 ", line)
+    assert re.search(r"data-pipeli… {4}\$1,234\.56 ", line)
     header = cli.header_row().replace("\t", " ")
     assert header.index("COST") + len("COST") == line.index("$1,234.56") + len("$1,234.56")  # titles stay aligned
+
+
+def in_project(name: str, n: int = 1):
+    return [Session(id=f"{name}{i}", file="f", cwd=f"/code/{name}", title="t", first_ts=1e9, last_ts=1e9)
+            for i in range(n)]
+
+
+def test_project_fits_the_names_of_nearly_all_sessions():
+    """A few sessions of a project with a long name do not push COST away for all the others."""
+    sessions = in_project("claude-code-sessions", 19) + in_project("employee-performance-monitoring")
+    cols = cli.columns(sessions, {})
+    assert cols.project == len("claude-code-sessions")
+    assert cli.row(sessions[0], {}, {}, cols).split("\t")[1] == "claude-code-sessions"
+    assert cli.row(sessions[-1], {}, {}, cols).split("\t")[1] == "employee-performanc…"
+    assert cli.columns(in_project("employee-performance-monitoring"), {}).project == cli.PROJECT_MAX
+    assert cli.columns(in_project("api"), {}).project == cli.PROJECT_MIN  # short names keep the usual width
+
+
+def test_a_narrow_list_gives_title_its_room_first():
+    sessions = in_project("claude-code-sessions", 5)
+    wide = cli.columns(sessions, {}, width=200)
+    assert wide.project == len("claude-code-sessions")
+    narrow = cli.columns(sessions, {}, width=77)  # the list's half of a 160-column terminal
+    assert narrow.project == 77 - cli.ROW_FRAME - narrow.cost - cli.TITLE_MIN
+    assert cli.columns(sessions, {}, width=40).project == cli.PROJECT_MIN  # a tiny terminal still names the project
+
+
+def test_columns_stay_aligned_whatever_their_widths():
+    sessions = in_project("claude-code-sessions", 3)
+    cols = cli.columns(sessions, {})
+    header, line = cli.header_row(cols).replace("\t", " "), cli.row(sessions[0], {}, {}, cols).replace("\t", " ")
+    cost = cli.cost_text(sessions[0], {})
+    assert header.index("COST") + len("COST") == line.index(cost) + len(cost)
+    # the largest cost is COST_GAP and the tab's cell away from the name
+    assert line.index(cost) - line.index("claude-code-sessions") - len("claude-code-sessions") == cli.COST_GAP + 1
+
+
+def test_list_width_matches_fzf_and_the_terminal(monkeypatch):
+    """Before fzf runs there are no FZF_ sizes; the preview takes half of the terminal, less 4 (measured in fzf 0.75)."""
+    for total, preview in ((160, 76), (101, 46)):
+        monkeypatch.setattr(cli.shutil, "get_terminal_size", lambda t=total: os.terminal_size((t, 40)))
+        assert cli.list_width({}) == cli.list_width({"FZF_COLUMNS": str(total), "FZF_PREVIEW_COLUMNS": str(preview)})
+    assert cli.list_width({"FZF_COLUMNS": "160", "FZF_PREVIEW_COLUMNS": "76"}) == 77
