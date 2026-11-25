@@ -9,10 +9,13 @@ from __future__ import annotations
 
 import argparse
 import os
+import re
 import shlex
 import shutil
+import signal
 import subprocess
 import sys
+import tempfile
 import time
 import unicodedata
 from pathlib import Path
@@ -32,10 +35,21 @@ CACHE_DIR = Path(os.environ.get("XDG_CACHE_HOME", Path.home() / ".cache")) / "cc
 
 BOLD, DIM, RESET = "\033[1m", "\033[2m", "\033[0m"
 TIME_WIDTH, PROJECT_WIDTH, TITLE_WIDTH = 19, 12, 60  # the date is 16 wide; 3 more keep it apart from PROJECT
-COST_WIDTH = 9  # "$1,234.56"
-STATUS_LEGEND = {"●": "Claude is working", "○": "open, waiting for you", "!": "stopped mid-turn"}
+COST_WIDTH = 14  # "$1,234.56" is 9 wide; 5 more keep it apart from PROJECT
 HIT = "\033[1;33m"  # search words in the preview
 GREEN, YELLOW, RED = "\033[32m", "\033[33m", "\033[31m"
+BRIGHT_GREEN, LIGHT_BLUE, PINK = "\033[38;5;41m", "\033[38;5;75m", "\033[1;38;5;213m"
+# What a session is doing, in the order the legend lists the states; the names are what the legend says.
+WORKING, NEEDS_YOU, WAITING, STOPPED, CLOSED = (
+    "working", "needs you", "waiting", "stopped mid-turn", "closed")
+SPINNER = "◐◓◑◒"  # the working mark turns a quarter each frame
+FRAME_SECONDS = 0.3  # how often fzf reloads the open list (fzf 0.74.5 and later)
+REREAD_SECONDS = 2.0  # a reload on the timer reads a changed transcript again at most this often
+# The timer event every(N) came in fzf 0.73; before 0.74.5, fzf fired focus only when the cursor's row number
+# changed, so after a reload the preview went on showing the session that was in that row before.
+LIVE_FZF = (0, 74, 5)
+STATUS_MARKS = {WORKING: SPINNER[0], NEEDS_YOU: "◉", WAITING: "○", STOPPED: "!", CLOSED: " "}
+STATUS_COLORS = {WORKING: BRIGHT_GREEN, NEEDS_YOU: PINK, WAITING: LIGHT_BLUE, STOPPED: RED, CLOSED: ""}
 BAR_WIDTH, EIGHTHS = 20, " ▏▎▍▌▋▊▉"
 PROMPT_CELLS = 300  # of each prompt in the preview; longer ones end in …
 # fzf fields: the 7 visible columns, then hidden ones the bindings use
@@ -58,6 +72,8 @@ def main(argv: Optional[List[str]] = None) -> int:
     parser.add_argument("--preview", metavar="FILE", help=argparse.SUPPRESS)
     parser.add_argument("--find", metavar="QUERY", help=argparse.SUPPRESS)  # with --preview: show the hits
     parser.add_argument("--rows", metavar="QUERY", help=argparse.SUPPRESS)  # fzf reload on every keystroke
+    parser.add_argument("--state", metavar="DIR", help=argparse.SUPPRESS)  # with --rows: what the open list shows
+    parser.add_argument("--tick", action="store_true", help=argparse.SUPPRESS)  # with --rows: a reload on fzf's timer
     parser.add_argument("--rename", nargs=2, metavar=("ID", "FILE"), help=argparse.SUPPRESS)  # fzf Ctrl-R
     args = parser.parse_args(argv)
 
@@ -68,11 +84,13 @@ def main(argv: Optional[List[str]] = None) -> int:
         session_id, path = args.rename
         return rename(Path(path), session_id, live_status(LIVE_DIR).get(session_id))
 
-    sessions = load_sessions(PROJECTS_DIR, CACHE_DIR)
-    prices = load_prices(CACHE_DIR)
+    max_age = REREAD_SECONDS if args.tick else 0.0
+    sessions = load_sessions(PROJECTS_DIR, CACHE_DIR, max_age)
+    prices = load_prices(CACHE_DIR, download=args.rows is None)  # a reload never waits for the network
     live = live_status(LIVE_DIR)
     if args.rows is not None:
-        print("\n".join(fzf_lines(search(sessions, args.rows, CACHE_DIR), prices, live)))
+        shown = listed(sessions, args.rows, Path(args.state) if args.state else None, args.tick, max_age)
+        print("\n".join(fzf_lines(shown, prices, live, spinner_frame())))
         return 0
     query = search_query(args.search)
     if args.list:
@@ -81,6 +99,38 @@ def main(argv: Optional[List[str]] = None) -> int:
             print(row(s, prices, live))
         return 0
     return pick(sessions, prices, live, query)
+
+
+def listed(sessions: List[Session], query: str, state: Optional[Path], tick: bool, max_age: float) -> List[Session]:
+    """The sessions a reload of the open list shows. fzf keeps the cursor on a row number across reloads, so a row
+    added, removed or moved above the cursor would put another session under it, and Enter would open that one.
+    Typing lists the sessions that match in the order the list opened with, sessions started since then first, and
+    keeps their ids in `state`; a reload on the timer shows those same sessions in the same rows, with what they
+    are doing now. A session that is new, or has come to match the query, shows up with the next key you press."""
+    if state is not None and tick:
+        ids = read_ids(state / "shown")
+        if ids is not None:
+            by_id = {s.id: s for s in sessions}
+            return [by_id[sid] for sid in ids if sid in by_id]
+    shown = search(sessions, query, CACHE_DIR, max_age)
+    if state is not None:
+        place = {sid: i for i, sid in enumerate(read_ids(state / "order") or [])}
+        shown = sorted(shown, key=lambda s: place.get(s.id, -1))  # a stable sort keeps new sessions newest first
+        write_ids(state / "shown", [s.id for s in shown])
+    return shown
+
+
+def read_ids(path: Path) -> Optional[List[str]]:
+    try:
+        return path.read_text().split()
+    except OSError:
+        return None
+
+
+def write_ids(path: Path, ids: List[str]) -> None:
+    tmp = path.with_suffix(f".{os.getpid()}.tmp")  # whole or not at all: fzf kills a reload it no longer needs
+    tmp.write_text("\n".join(ids))
+    tmp.replace(path)
 
 
 def search_query(words: Optional[List[str]]) -> Optional[str]:
@@ -98,7 +148,7 @@ def header_row() -> str:
                       " CTX", " ", "TITLE"])
 
 
-def row(s: Session, prices, live: Dict[str, Live], color: bool = False) -> str:
+def row(s: Session, prices, live: Dict[str, Live], color: bool = False, frame: int = 0) -> str:
     cost = s.usage.cost(prices)
     return "\t".join([
         pad(fmt_time(s.last_ts), TIME_WIDTH),
@@ -106,7 +156,7 @@ def row(s: Session, prices, live: Dict[str, Live], color: bool = False) -> str:
         (fmt_money(cost) if cost is not None else "—").rjust(COST_WIDTH),
         fmt_duration(span(s)).rjust(4),
         ctx_cell(s, prices, color),
-        status_mark(s, live),
+        status_mark(status(s, live), frame, color),
         cut(s.title or "(untitled)", TITLE_WIDTH),
     ])
 
@@ -225,16 +275,27 @@ def fmt_tokens(n: int) -> str:
     return f"{round(n / 1000)}K" if n >= 1000 else str(n)
 
 
-def status_mark(s: Session, live: Dict[str, Live]) -> str:
+def status(s: Session, live: Dict[str, Live]) -> str:
+    """What the session is doing: an open session says so itself; a closed one, by how its transcript ends."""
     if s.id in live:
-        return "●" if live[s.id].busy else "○"
-    return "!" if s.interrupted else " "
+        return {"busy": WORKING, "waiting": NEEDS_YOU}.get(live[s.id].status, WAITING)
+    return STOPPED if s.interrupted else CLOSED
 
 
-def legend(sessions: List[Session], live: Dict[str, Live]) -> str:
-    """The status marks with how many sessions have each: "● 1 Claude is working · …"."""
-    marks = [status_mark(s, live) for s in sessions]
-    return " · ".join(f"{mark} {marks.count(mark)} {meaning}" for mark, meaning in STATUS_LEGEND.items())
+def status_mark(state: str, frame: int = 0, color: bool = False) -> str:
+    mark = SPINNER[frame % len(SPINNER)] if state == WORKING else STATUS_MARKS[state]
+    return f"{STATUS_COLORS[state]}{mark}{RESET}" if color and STATUS_COLORS[state] else mark
+
+
+def spinner_frame() -> int:
+    return int(time.time() / FRAME_SECONDS)
+
+
+def legend(sessions: List[Session], live: Dict[str, Live], frame: int = 0, color: bool = False) -> str:
+    """How many of the sessions are in each state: "◐ 1 working · ◉ 0 needs you · … · 412 closed"."""
+    states = [status(s, live) for s in sessions]
+    return " · ".join(f"{status_mark(state, frame, color)} {states.count(state)} {state}".strip()
+                      for state in STATUS_MARKS)
 
 
 def cut(text: str, width: int) -> str:
@@ -326,8 +387,74 @@ def me_command() -> str:
     return f"{shlex.quote(sys.executable)} -m ccs"
 
 
-def fzf_lines(sessions: List[Session], prices, live: Dict[str, Live]) -> List[str]:
-    return [header_row()] + [f"{row(s, prices, live, color=True)}\t{s.file}\t{s.cwd}\t{s.id}" for s in sessions]
+def fzf_version(fzf: str) -> Tuple[int, ...]:
+    """(0, 74, 5) for fzf 0.74.5; () when it cannot tell."""
+    try:
+        out = subprocess.run([fzf, "--version"], capture_output=True, text=True, timeout=5).stdout
+    except (OSError, subprocess.SubprocessError):
+        return ()
+    found = re.match(r"\s*(\d+)\.(\d+)(?:\.(\d+))?", out or "")
+    return tuple(int(part or 0) for part in found.groups()) if found else ()
+
+
+FZF_HEADER_LINES = 3  # the legend, a blank line, the column titles: fzf reads them again with each reload
+
+
+def fzf_lines(sessions: List[Session], prices, live: Dict[str, Live], frame: int = 0) -> List[str]:
+    return [legend(sessions, live, frame, color=True), "", header_row()] + [
+        f"{row(s, prices, live, color=True, frame=frame)}\t{s.file}\t{s.cwd}\t{s.id}" for s in sessions]
+
+
+def fzf_command(fzf: str, header: str, state: Path, query: Optional[str], live_list: bool) -> List[str]:
+    me = me_command()
+    rows_cmd = f"{me} --rows {{q}} --state {shlex.quote(str(state))}"
+    preview_cmd = f"{me} --preview {{{FILE_FIELD}}} --find {{q}}"
+    rename_cmd = f"{me} --rename {{{ID_FIELD}}} {{{FILE_FIELD}}}"
+    cmd = [
+        fzf, "--ansi", "--layout=reverse", f"--header-lines={FZF_HEADER_LINES}", "--delimiter=\t",
+        f"--with-nth=1..{FILE_FIELD - 1}",
+        "--tabstop=1",  # columns are padded already; a tab adds one space, not up to eight
+        "--prompt=sessions> ", f"--header={header}",
+        "--preview-window=right,50%,wrap,noinfo",  # no scroll position over the lines added and removed
+        # fzf's own filter sees only the row; ccs also looks at what was said, so it does the searching
+        "--disabled",
+    ]
+    if live_list:
+        # The list reloads itself on a timer, so statuses stay true and the working mark turns. fzf cuts a reload
+        # short when the next one starts, and a list whose reloads never finish never changes: each reload pauses
+        # the timer until the list has loaded. reload-sync, not reload: fzf shows a list that is still being read,
+        # and pulls the cursor up into the rows read so far. --track would drop the keys typed during a reload, so
+        # the cursor keeps its row number, and the rows stay where they are (see listed). With --id-nth, the same
+        # session under the cursor after a reload is no new focus, so the preview runs when the session or the
+        # query changes, not with every frame as --preview would. FZF_DEFAULT_OPTS comes before these options:
+        # --no-preview and --no-track keep a --preview or --track from it off.
+        timer = f"every({FRAME_SECONDS})"
+        pause, preview = f"unbind({timer})", f"preview({preview_cmd})"
+        cmd += [
+            "--no-preview", "--no-track",
+            f"--bind={timer}:{pause}+reload-sync({rows_cmd} --tick)", f"--bind=load:rebind({timer})",
+            f"--id-nth={ID_FIELD}", f"--bind=focus:{preview}",
+            f"--bind=change:{pause}+reload({rows_cmd})+{preview}",
+            f"--bind=ctrl-r:{pause}+execute({rename_cmd})+reload-sync({rows_cmd})+{preview}",
+            # The row under the cursor, as macOS selects a row: a band of the system blue (#0a84ff, 33 here, which
+            # every 256-colour terminal shows) across the whole line, all its text white; strip drops the row's own
+            # colours there, which would not read on the blue. The pointer takes the band's colour, so it does not
+            # show, and the other rows get no gutter marks.
+            "--highlight-line", "--gutter= ", "--color=bg+:33,fg+:231:regular:strip,pointer:33",
+            "--header-lines-border=bottom",  # a line between the column titles and the rows
+        ]
+    else:
+        cmd += [
+            f"--bind=change:reload:{rows_cmd}", f"--preview={preview_cmd}",
+            f"--bind=ctrl-r:execute({rename_cmd})+reload({rows_cmd})",
+        ]
+    if query:
+        cmd.append(f"--query={query}")
+    return cmd
+
+
+def _hang_up(signum, frame):
+    raise SystemExit(128 + signum)
 
 
 def pick(sessions: List[Session], prices, live: Dict[str, Live], query: Optional[str] = None) -> int:
@@ -337,25 +464,23 @@ def pick(sessions: List[Session], prices, live: Dict[str, Live], query: Optional
         print("ccs: fzf is required (https://github.com/junegunn/fzf). Use --list for a plain list.", file=sys.stderr)
         return 1
 
-    me = me_command()
     table, *rows, top = stats_lines(sessions, prices, time.time())
     stats = "\n".join([f"{DIM}{table}{RESET}", *rows, f"{DIM}{top}{RESET}"])
     keys = "Type to search · Enter: resume · Ctrl-R: rename · Esc: quit"
-    header = f"{stats}\n\n{keys}\n{legend(sessions, live)}\n "  # blank lines set the parts apart
-    cmd = [
-        fzf, "--ansi", "--layout=reverse", "--header-lines=1", "--delimiter=\t", f"--with-nth=1..{FILE_FIELD - 1}",
-        "--tabstop=1",  # columns are padded already; a tab adds one space, not up to eight
-        "--prompt=sessions> ", f"--header={header}",
-        "--preview-window=right,50%,wrap,noinfo",  # no scroll position over the lines added and removed
-        # fzf's own filter sees only the row; ccs also looks at what was said, so it does the searching
-        "--disabled", f"--bind=change:reload:{me} --rows {{q}}",
-        f"--preview={me} --preview {{{FILE_FIELD}}} --find {{q}}",
-        f"--bind=ctrl-r:execute({me} --rename {{{ID_FIELD}}} {{{FILE_FIELD}}})+reload({me} --rows {{q}})",
-    ]
-    if query:
-        cmd.append(f"--query={query}")
-    lines = fzf_lines(search(sessions, query or "", CACHE_DIR), prices, live)
-    result = subprocess.run(cmd, input="\n".join(lines), stdout=subprocess.PIPE, text=True)
+    header = f"{stats}\n\n{keys}"  # a blank line sets the parts apart
+    shown = search(sessions, query or "", CACHE_DIR)
+    lines = fzf_lines(shown, prices, live, spinner_frame())
+    live_list = fzf_version(fzf) >= LIVE_FZF
+    state = Path(tempfile.mkdtemp(prefix="ccs-"))  # what the open list shows, for its reloads (see listed)
+    hang_up = signal.signal(signal.SIGHUP, _hang_up)  # a closed terminal tab still removes the state
+    try:
+        write_ids(state / "order", [s.id for s in sessions])
+        write_ids(state / "shown", [s.id for s in shown])
+        result = subprocess.run(fzf_command(fzf, header, state, query, live_list), input="\n".join(lines),
+                                stdout=subprocess.PIPE, text=True)
+    finally:
+        signal.signal(signal.SIGHUP, hang_up)
+        shutil.rmtree(state, ignore_errors=True)
     if result.returncode != 0 or not result.stdout.strip():
         return 0  # Esc or Ctrl-C
 
@@ -386,7 +511,7 @@ def print_preview(path: Path, words: Optional[List[str]] = None) -> None:
     if s.branch:
         print(f"{caption('Branch')}{s.branch}")
     print(f"{caption('Session ID')}{s.id}")
-    for line in usage_lines(s, load_prices(CACHE_DIR)):
+    for line in usage_lines(s, load_prices(CACHE_DIR, download=False)):  # the list itself fetches the table
         print(line)
     print()
     width = preview_width()

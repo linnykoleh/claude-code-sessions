@@ -4,7 +4,7 @@
     CLAUDE_CONFIG_DIR=/tmp/ccs-demo/claude XDG_CACHE_HOME=/tmp/ccs-demo/cache CCS_OFFLINE=1 ccs
 
 Every project, title, prompt and path here is made up. Times are relative to now, so the
-"Today" and "Last 7 days" rows always have something in them. Two sessions are shown as open
+"Today" and "Last 7 days" rows always have something in them. Three sessions are shown as open
 in Claude Code: each gets a `sleep` process to stand in for a running Claude (they exit after
 --live-seconds).
 """
@@ -38,7 +38,8 @@ HOME = "/Users/you/code"
 MINUTE, HOUR, DAY = 60, 3600, 86400
 
 # (project, branch, title, started this long ago, lasted, responses, state, prompts)
-# state: "busy" = Claude is working now, "idle" = open and waiting, "cut" = stopped mid-turn, "" = finished
+# state: "busy" = Claude is working now, "waiting" = Claude asks you something (a permission prompt),
+# "idle" = open and waiting for a prompt, "cut" = stopped mid-turn, "" = finished
 SESSIONS = [
     ("payments-api", "PAY-512-refund-retries", "Fix retry logic in the refund worker", 3 * HOUR, 3 * HOUR - 60, 90, "busy", [
         "The refund worker retries forever when the bank API returns 409. Find out why.",
@@ -59,7 +60,7 @@ SESSIONS = [
         "Store the keys in Redis with a 24h TTL.",
         "Now the integration test for duplicate deliveries.",
     ]),
-    ("docs", "onboarding", "Rewrite the onboarding guide", DAY + 2 * HOUR, 12 * MINUTE, 12, "", [
+    ("docs", "onboarding", "Rewrite the onboarding guide", DAY + 2 * HOUR, 12 * MINUTE, 12, "waiting", [
         "Rewrite docs/onboarding.md: shorter, steps in the order a new hire needs them.",
     ]),
     ("data-pipeline", "DP-77-late-events", "Late events break the daily aggregation", 2 * DAY + 2 * HOUR, 2 * HOUR, 70, "", [
@@ -137,11 +138,12 @@ def main() -> None:
         path = claude_dir / "projects" / cwd.replace("/", "-") / f"{sid}.jsonl"
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text("".join(json.dumps(r) + "\n" for r in records))
-        if state in ("busy", "idle"):
+        if state in ("busy", "waiting", "idle"):
             pid = subprocess.Popen(["sleep", str(args.live_seconds)], start_new_session=True,
                                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL).pid
             (claude_dir / "sessions" / f"{pid}.json").write_text(
-                json.dumps({"pid": pid, "sessionId": sid, "cwd": cwd, "status": state}))
+                json.dumps({"pid": pid, "sessionId": sid, "cwd": cwd, "status": state,
+                            **({"waitingFor": "approve Bash: npm test"} if state == "waiting" else {})}))
     print(f"{len(SESSIONS)} demo sessions in {claude_dir}")
 
 
@@ -158,13 +160,13 @@ def transcript(rng, edits, sid, cwd, branch, title, start, lasted, responses, st
         t = start + i * step
         records.append({**base, "type": "user", "timestamp": iso(t), "message": {"role": "user", "content": prompt}})
         last_turn = i == len(prompts) - 1
-        if last_turn and state == "busy":
+        if last_turn and state in ("busy", "waiting"):
             per_prompt //= 2  # still working: no end of turn yet
         work = min(step * 0.6, rng.uniform(2, 12) * MINUTE)
         for j in range(per_prompt):
             sent += 1
             t_resp = t + work * (j + 1) / per_prompt
-            done = j == per_prompt - 1 and not (last_turn and state in ("busy", "cut"))
+            done = j == per_prompt - 1 and not (last_turn and state in ("busy", "waiting", "cut"))
             edit = not done and edits.random() < EDIT_SHARE
             records.append({**base, "type": "assistant", "timestamp": iso(t_resp), "requestId": f"req_{uuid.UUID(int=rng.getrandbits(128))}",
                             "message": {"id": f"msg_{uuid.UUID(int=rng.getrandbits(128))}",
@@ -178,7 +180,7 @@ def transcript(rng, edits, sid, cwd, branch, title, start, lasted, responses, st
         if last_turn and state == "cut":
             records.append({**base, "type": "user", "timestamp": iso(t + work + 5),
                             "message": {"content": [{"type": "text", "text": "[Request interrupted by user]"}]}})
-        elif not (last_turn and state == "busy"):
+        elif not (last_turn and state in ("busy", "waiting")):
             records.append({**base, "type": "system", "subtype": "turn_duration", "durationMs": int(work * 1000),
                             "timestamp": iso(t + work)})
     return records

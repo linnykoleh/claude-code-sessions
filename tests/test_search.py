@@ -138,8 +138,11 @@ def fzf(tmp_path, monkeypatch):
     """Run pick() against a fake fzf; returns what it was given: {"cmd": [...], "rows": [...]}."""
     seen = {}
 
-    def run(cmd, input, **kwargs):
-        seen["cmd"], seen["rows"] = cmd, input.splitlines()[1:]  # without the header row
+    def run(cmd, input=None, **kwargs):
+        if cmd[1:] == ["--version"]:
+            return subprocess.CompletedProcess(cmd, 0, stdout="0.75.0 (c7bf2b8e)\n")
+        header_lines = int(next(a for a in cmd if a.startswith("--header-lines=")).split("=")[1])
+        seen["cmd"], seen["rows"] = cmd, input.splitlines()[header_lines:]  # the sessions, without the header lines
         return subprocess.CompletedProcess(cmd, 130, stdout="")  # Esc
 
     monkeypatch.setenv("FZF", "fzf")
@@ -152,9 +155,11 @@ def test_one_search_box_looks_everywhere(three, fzf):
     assert cli.pick(three, {}, {}) == 0
     cmd = fzf["cmd"]
     assert "--disabled" in cmd                                   # fzf does not filter, ccs does
-    assert f"--bind=change:reload:{cli.me_command()} --rows {{q}}" in cmd
-    assert any(a.startswith("--preview=") and a.endswith("--find {q}") for a in cmd)
-    assert any(a.startswith("--bind=ctrl-r:") and a.endswith("--rows {q})") for a in cmd)  # after a rename, same query
+    change = next(a for a in cmd if a.startswith("--bind=change:"))
+    assert f"reload:{cli.me_command()} --rows {{q}}" in change or f"reload({cli.me_command()} --rows {{q}}" in change
+    assert any(f"--preview {{{cli.FILE_FIELD}}} --find {{q}}" in a for a in cmd)  # the preview shows the hits
+    ctrl_r = next(a for a in cmd if a.startswith("--bind=ctrl-r:"))
+    assert re.search(r"\+reload(-sync)?\(" + re.escape(f"{cli.me_command()} --rows {{q}}"), ctrl_r)  # same query
     assert not any("ctrl-s" in a for a in cmd)
     assert len(fzf["rows"]) == 3
 

@@ -17,7 +17,7 @@ The script installs what is missing and then the `ccs` command itself:
 | What | Why | How |
 |---|---|---|
 | [uv](https://docs.astral.sh/uv/) | installs and runs `ccs` in its own environment | `mise use -g uv`, else Homebrew |
-| [fzf](https://github.com/junegunn/fzf) | the interactive list | `mise use -g fzf`, else Homebrew |
+| [fzf](https://github.com/junegunn/fzf) | the interactive list; 0.74.5 or later keeps it [live](#live-list) | `mise use -g fzf`, else Homebrew |
 | `ccs` | this tool (Python 3.9+, no other packages) | `uv tool install` |
 
 Already have uv and fzf? Install directly:
@@ -74,7 +74,7 @@ ccs --help
 A session that is already running is not opened a second time without asking:
 
 - A background session (`claude --bg`) is attached with `claude attach <id>`.
-- A session open in another terminal or an IDE (`●` or `○`): `ccs` says where it is open (pid and terminal) and asks
+- A session open in another terminal or an IDE (`◐`, `◉` or `○`): `ccs` says where it is open (pid and terminal) and asks
   whether to open a copy (`claude --resume <id> --fork-session`) or to resume it anyway. Enter cancels.
 
 Ctrl-R writes the name the way `/rename` does and keeps the session's place in Claude Code's own list. A session
@@ -117,7 +117,7 @@ ccs --list | awk -F'\t' '$1 >= "2026-11-20"'         # sessions since 20 Novembe
 
 The table on top sums your sessions for today, the last 7 days, the last 30 days and everything `ccs` can see. The last row, All, is dated by your oldest session: Claude Code deletes sessions older than `cleanupPeriodDays` in `~/.claude/settings.json` (30 days by default), so raise it to keep a longer history. A session counts in a period if you worked in it then. COST and CLAUDE TIME count only what was spent in the period, by the day of each message, so a session started yesterday and continued today adds only today's part to Today. CLAUDE TIME is how long Claude worked on its turns, not how long the session was open. Top projects are the three that cost the most overall.
 
-The line under the keys counts sessions by status.
+The line above the column titles counts the listed sessions by status.
 
 ### Columns
 
@@ -128,16 +128,20 @@ The line under the keys counts sessions by status.
 | COST | what the tokens would cost at Anthropic API list prices, subagents included. On a subscription this is not what you pay; it shows how much work went into the session |
 | TIME | from the first to the last message |
 | CTX | how full the context window was at the last answer: green below 50 %, yellow up to 80 %, red from 80 %, when Claude Code is about to compact. The window comes from LiteLLM's table (1M for current models); a session that already held more than 200K counts as 1M |
-| (status) | `●` Claude is working in it right now; `○` it is open in a terminal and waits for you; `!` it was closed before Claude finished its turn: you pressed Esc, declined a tool, or your last prompt got no answer. Blank: closed after Claude answered |
+| (status) | `◐` (green, turning) Claude is working in it right now; `◉` (pink) it needs you: a permission prompt, a question or a dialog waits for your answer; `○` (blue) it is open and waits for your next prompt; `!` (red) it was closed before Claude finished its turn: you pressed Esc, declined a tool, or your last prompt got no answer. Blank: closed after Claude answered |
 | TITLE | the name you gave it with `/rename`, else Claude's title, else your first prompt. It comes last, so a narrow window cuts only the title |
 
 In its top right corner, the preview shows how many lines Claude added (green `+`) and removed (red `-`) in the session with Edit and Write, subagents included, counted the way `git diff --stat` counts them. Changes made through Bash (`sed`, `git checkout`) and your own edits are not in the transcript, so they do not count.
 
 Under the title, the preview names the session's folder, branch and session ID, then shows two bars: Context, how full the context window is (tokens and model), and Cache, how much of the input Claude read from the prompt cache over the whole session, subagents included. Cached input costs a tenth, so green is good there.
 
+### Live list
+
+With fzf 0.74.5 or later, the list refreshes itself about three times a second while it is open: the status marks and the count above the column titles follow what each Claude Code is doing, and `◐` turns while Claude works. The rows stay where they are, so the cursor stays on its session: a session started since the list opened, or one that has come to match your search, shows up with the next key you press. A transcript that keeps growing is read again at most every two seconds, so the cost, time and context of a working session follow a little behind. Each refresh runs `ccs` once, about 45 ms of CPU, so an open list takes roughly a tenth of one core. With an older fzf, the statuses are those of the moment the list opened, and they change only when you type.
+
 ## How it works
 
-- Claude Code stores each session as `~/.claude/projects/<project>/<session-id>.jsonl`, and its subagents under `<session-id>/subagents/`. A running Claude Code registers its session in `~/.claude/sessions/<pid>.json`, which gives `●` and `○`. `ccs` reads these files and nothing else; your sessions never leave your machine.
+- Claude Code stores each session as `~/.claude/projects/<project>/<session-id>.jsonl`, and its subagents under `<session-id>/subagents/`. A running Claude Code registers its session in `~/.claude/sessions/<pid>.json` with its status (working, waiting for you, idle), which gives `◐`, `◉` and `○`. `ccs` reads these files and nothing else; your sessions never leave your machine.
 - Prices come from [LiteLLM's public price table](https://github.com/BerriAI/litellm/blob/main/model_prices_and_context_window.json), the same source [ccusage](https://github.com/ryoppippi/ccusage) uses. `ccs` downloads it once a week and keeps only the Claude models. Costs match ccusage within a few cents per session, except for sessions forked from another session.
 - Everything it reads is cached in `~/.cache/cc-sessions`: `index-v<N>.json` for the list, `text-v<N>.json` for search. The first run reads all sessions (a few seconds for a few GB); after that only sessions that changed are read again.
 

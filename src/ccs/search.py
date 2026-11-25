@@ -9,23 +9,25 @@ import json
 import os
 import re
 import shlex
+import time
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
+from ccs.index import remove_leftovers
 from ccs.sessions import Session, local_day, messages
 
 TEXT_CACHE_VERSION = 1
 SNIPPET_CONTEXT = 70  # characters shown on each side of a hit
 
 
-def search(sessions: List[Session], query: str, cache_dir: Path) -> List[Session]:
+def search(sessions: List[Session], query: str, cache_dir: Path, max_age: float = 0.0) -> List[Session]:
     """The sessions that have every word of the query somewhere: in the title, project, branch, the day of the last
     message ("2026-11-24"), your prompts or Claude's replies; in the order given. "Words in quotes" are one phrase.
-    An empty query keeps every session."""
+    An empty query keeps every session. max_age: see load_texts."""
     words = query_words(query)
     if not words:
         return sessions
-    texts = load_texts([Path(s.file) for s in sessions], cache_dir)
+    texts = load_texts([Path(s.file) for s in sessions], cache_dir, max_age)
     found = []
     for s in sessions:
         about = "\n".join([s.title, s.project, s.branch, local_day(s.last_ts)]).lower()
@@ -73,11 +75,13 @@ def highlight(text: str, words: List[str], on: str, off: str) -> str:
     return pattern.sub(lambda m: f"{on}{m.group(0)}{off}", text)
 
 
-def load_texts(paths: List[Path], cache_dir: Path) -> Dict[str, str]:
-    """{transcript: its prompts and replies, lowercased, whitespace collapsed}."""
+def load_texts(paths: List[Path], cache_dir: Path, max_age: float = 0.0) -> Dict[str, str]:
+    """{transcript: its prompts and replies, lowercased, whitespace collapsed}. A transcript that changed is read
+    again; with max_age, only once its last reading is max_age seconds old, as in index.load_sessions."""
     cache_file = cache_dir / f"text-v{TEXT_CACHE_VERSION}.json"
     cached = _read_cache(cache_file)
     entries: Dict[str, dict] = {}
+    now = time.time()
     for path in paths:
         try:
             st = path.stat()
@@ -85,8 +89,9 @@ def load_texts(paths: List[Path], cache_dir: Path) -> Dict[str, str]:
             continue
         key = [st.st_mtime_ns, st.st_size]
         hit = cached.get(str(path))
-        if not hit or hit.get("key") != key:
-            hit = {"key": key, "text": "\n".join(" ".join(t.split()) for _, _, t in messages(path)).lower()}
+        if not hit or (hit.get("key") != key and now - hit.get("read", 0) >= max_age):
+            text = "\n".join(" ".join(t.split()) for _, _, t in messages(path)).lower()
+            hit = {"key": key, "read": now, "text": text}
         entries[str(path)] = hit
     if entries != cached:
         _write_cache(cache_file, entries)
@@ -103,6 +108,7 @@ def _read_cache(path: Path) -> Dict[str, dict]:
 
 def _write_cache(path: Path, entries: Dict[str, dict]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
+    remove_leftovers(path)
     tmp = path.with_suffix(f".{os.getpid()}.tmp")  # fzf may run two searches at once
     tmp.write_text(json.dumps({"version": TEXT_CACHE_VERSION, "sessions": entries}, ensure_ascii=False))
     tmp.replace(path)

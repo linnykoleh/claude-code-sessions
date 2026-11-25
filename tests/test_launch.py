@@ -13,12 +13,12 @@ def test_a_closed_session_is_resumed():
 
 
 def test_a_background_session_is_attached():
-    live = Live(pid=1, busy=True, job_id="c0ffee12")
+    live = Live(pid=1, status="busy", job_id="c0ffee12")
     assert resume_command(SID, live, ask=never_ask) == ["claude", "attach", "c0ffee12"]
 
 
 def test_a_session_open_elsewhere_asks_first():
-    live = Live(pid=4242, busy=False)
+    live = Live(pid=4242, status="idle")
     questions = []
 
     def answer(reply):

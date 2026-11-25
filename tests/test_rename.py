@@ -59,7 +59,7 @@ def test_empty_or_same_name_writes_nothing(transcript, reply):
     assert transcript.read_text() == before
 
 
-@pytest.mark.parametrize("live", [Live(pid=4242, busy=False), Live(pid=4242, busy=True, job_id="c0ffee12")])
+@pytest.mark.parametrize("live", [Live(pid=4242, status="idle"), Live(pid=4242, status="busy", job_id="c0ffee12")])
 def test_an_open_session_is_not_renamed(transcript, live):
     before = transcript.read_text()
     ask = answer("anything")

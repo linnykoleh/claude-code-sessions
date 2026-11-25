@@ -209,21 +209,29 @@ def test_live_status_keeps_running_processes_only(tmp_path):
     (tmp_path / "5.json").write_text(json.dumps(
         {"pid": os.getpid(), "sessionId": "d", "status": "idle", "kind": "interactive", "jobId": "ignored"}))
     assert live_status(tmp_path) == {
-        "a": Live(pid=os.getpid(), busy=True),
-        "c": Live(pid=os.getpid(), busy=False, job_id="c0ffee12"),
-        "d": Live(pid=os.getpid(), busy=False),
+        "a": Live(pid=os.getpid(), status="busy"),
+        "c": Live(pid=os.getpid(), status="idle", job_id="c0ffee12"),
+        "d": Live(pid=os.getpid(), status="idle"),
     }
     assert live_status(tmp_path / "missing") == {}
 
 
-def test_row_puts_title_last_and_marks_status():
+def test_live_status_tells_working_needs_you_and_idle_apart(tmp_path):
+    """Claude Code writes "waiting" while a permission prompt, a question or a dialog waits for you."""
+    import os
+    statuses = {"a": "busy", "b": "waiting", "c": "idle", "d": None, "e": "napping"}  # None: no status field
+    for sid, status in statuses.items():
+        data = {"pid": os.getpid(), "sessionId": sid, **({"status": status} if status else {})}
+        (tmp_path / f"{sid}.json").write_text(json.dumps(data))
+    assert {sid: live.status for sid, live in live_status(tmp_path).items()} == {
+        "a": "busy", "b": "waiting", "c": "idle", "d": "idle", "e": "idle"}
+
+
+def test_row_puts_title_last():
+    """The status column has tests of its own, in test_status.py."""
     s = Session(id="a", file="f", cwd="/code/payments-api", title="Fix it", first_ts=1e9, last_ts=1e9 + 3 * 3600)
     fields = row(s, PRICES, {}).split("\t")
     assert [f.strip() for f in fields[2:]] == ["$0.00", "3h", "", "", "Fix it"]  # no context known: CTX is blank
-    assert row(s, PRICES, {"a": Live(pid=1, busy=True)}).split("\t")[5] == "●"
-    assert row(s, PRICES, {"a": Live(pid=1, busy=False)}).split("\t")[5] == "○"
-    s.interrupted = True
-    assert row(s, PRICES, {}).split("\t")[5] == "!"
 
 
 

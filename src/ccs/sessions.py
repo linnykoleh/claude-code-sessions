@@ -202,7 +202,9 @@ def rename_session(path: Path, session_id: str, name: str) -> None:
 class Live:
     """A running Claude Code that has a session open."""
     pid: int
-    busy: bool  # Claude is working on a turn; else it waits for you
+    # "busy": Claude is working on a turn; "waiting": it needs you (a permission prompt, a question, a dialog);
+    # "idle": it waits for your next prompt
+    status: str
     job_id: Optional[str] = None  # only for a background session (`claude --bg`): what `claude attach` takes
 
 
@@ -217,7 +219,8 @@ def live_status(sessions_dir: Path) -> Dict[str, Live]:
             continue
         if _is_running(pid):  # a crashed Claude Code leaves its file behind
             job_id = data.get("jobId") if data.get("kind") == "bg" else None
-            live[session_id] = Live(pid=pid, busy=data.get("status") == "busy", job_id=job_id or None)
+            status = data.get("status") if data.get("status") in ("busy", "waiting") else "idle"
+            live[session_id] = Live(pid=pid, status=status, job_id=job_id or None)
     return live
 
 

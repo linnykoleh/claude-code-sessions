@@ -11,7 +11,6 @@ import json
 import os
 import re
 import time
-import urllib.request
 from pathlib import Path
 from typing import Dict, Optional
 
@@ -21,12 +20,12 @@ MAX_AGE_SECONDS = 7 * 24 * 3600
 Prices = Dict[str, Dict[str, float]]
 
 
-def load_prices(cache_dir: Path) -> Prices:
+def load_prices(cache_dir: Path, download: bool = True) -> Prices:
     """Return {model: {input, output, cache_write, cache_write_1h, cache_read}} in USD per token,
-    or {} if unavailable."""
+    or {} if unavailable. download=False only reads the cached table, however old."""
     path = cache_dir / "prices-v3.json"
     fresh = path.exists() and time.time() - path.stat().st_mtime < MAX_AGE_SECONDS
-    if not fresh and not os.environ.get("CCS_OFFLINE"):
+    if download and not fresh and not os.environ.get("CCS_OFFLINE"):
         try:
             _download(path)
         except Exception:
@@ -38,6 +37,8 @@ def load_prices(cache_dir: Path) -> Prices:
 
 
 def _download(path: Path) -> None:
+    import urllib.request  # here, not on top: it takes as long to import as the rest of ccs, and fzf runs ccs often
+
     with urllib.request.urlopen(PRICES_URL, timeout=10) as resp:
         table = json.load(resp)
     prices = {
