@@ -2,7 +2,7 @@
 
 `ccs` lists every [Claude Code](https://docs.anthropic.com/en/docs/claude-code) session you have run, across all your projects, newest first. Search it, preview what you asked, and press Enter to jump back into a session in the right folder.
 
-![ccs: statistics on top, sessions of all projects below with cost, time and context fill, the selected session's lines added and removed, context and cache bars and prompts on the right; then search and renaming](demo/ccs.svg)
+![ccs: statistics on top, sessions of all projects below with cost, time and context fill, Claude's usage limits pinned under the list, the selected session's lines added and removed, context and cache bars and prompts on the right; then search and renaming](demo/ccs.svg)
 
 ## Install
 
@@ -59,6 +59,7 @@ The built-in picker only shows sessions of the folder you are in. `ccs` shows al
 ccs                 # interactive list
 ccs -s kafka lag    # only sessions that have both words, as if typed in the list
 ccs --list          # plain table, no fzf
+ccs --save-limits   # keep Claude's usage limits from a status line's JSON on stdin (see Usage limits)
 ccs --version
 ccs --help
 ```
@@ -113,6 +114,32 @@ ccs -s "retry policy" --list                      # sessions that mention the ph
 ccs --list | awk -F'\t' '$1 >= "2026-11-20"'         # sessions since 20 November
 ```
 
+### Usage limits
+
+A section pinned under the list shows how much of your plan's limits you have used: the 5-hour window and the week,
+each with the time left until it resets. Green is below 50 %, yellow up to 80 %, red from 80 %. It stays in place
+while you scroll, and the cursor keeps a few rows of the list below it, so you never have to go down to it.
+
+```
+
+─ Usage limits ──────────────────────────────────────────────────────────────
+
+5h ███░░░░░░░░░░ 24% · resets 2h 17m   Week ████▎░░░░░░░░ 33% · resets 3d 4h
+
+```
+
+Claude Code gives these numbers only to your status line command, on its stdin, so the status line has to pass them
+on. Put `ccs --save-limits` in front of your status line in `~/.claude/settings.json`:
+
+```json
+{ "statusLine": { "type": "command", "command": "bash -c 'tee >(ccs --save-limits) | my-statusline'" } }
+```
+
+`ccs` shows the numbers from the last time the status line ran, so with no Claude Code open they can be old: the line
+title then says how old (`Usage limits · as of 25m ago`). A window that has reset since then says so instead of showing the old use.
+Without a saved snapshot, or with an API key instead of a plan, the section is empty. In a [live list](#live-list)
+it follows the status line while the list is open. It needs fzf 0.63 or later.
+
 ### Statistics
 
 The table on top sums your sessions for today, the last 7 days, the last 30 days and everything `ccs` can see. The last row, All, is dated by your oldest session: Claude Code deletes sessions older than `cleanupPeriodDays` in `~/.claude/settings.json` (30 days by default), so raise it to keep a longer history. A session counts in a period if you worked in it then. COST and CLAUDE TIME count only what was spent in the period, by the day of each message, so a session started yesterday and continued today adds only today's part to Today. CLAUDE TIME is how long Claude worked on its turns, not how long the session was open. Top projects are the three that cost the most overall.
@@ -143,7 +170,7 @@ With fzf 0.74.5 or later, the list refreshes itself about three times a second w
 
 - Claude Code stores each session as `~/.claude/projects/<project>/<session-id>.jsonl`, and its subagents under `<session-id>/subagents/`. A running Claude Code registers its session in `~/.claude/sessions/<pid>.json` with its status (working, waiting for you, idle), which gives `◐`, `◉` and `○`. `ccs` reads these files and nothing else; your sessions never leave your machine.
 - Prices come from [LiteLLM's public price table](https://github.com/BerriAI/litellm/blob/main/model_prices_and_context_window.json), the same source [ccusage](https://github.com/ryoppippi/ccusage) uses. `ccs` downloads it once a week and keeps only the Claude models. Costs match ccusage within a few cents per session, except for sessions forked from another session.
-- Everything it reads is cached in `~/.cache/cc-sessions`: `index-v<N>.json` for the list, `text-v<N>.json` for search. The first run reads all sessions (a few seconds for a few GB); after that only sessions that changed are read again.
+- Everything it reads is cached in `~/.cache/cc-sessions`: `index-v<N>.json` for the list, `text-v<N>.json` for search, `limits.json` for the [usage limits](#usage-limits). The first run reads all sessions (a few seconds for a few GB); after that only sessions that changed are read again.
 
 Settings, all optional:
 
