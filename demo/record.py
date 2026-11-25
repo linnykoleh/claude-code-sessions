@@ -29,10 +29,9 @@ BG, FG = "#1e1f29", "#d6d6d6"
 STEPS = [
     ("", 3.0),                                                  # stats, the list, CTX, the preview bars
     ("Down", 1.2), ("Down", 1.2), ("Down", 2.5),                # down to a red CTX
-    ("p", 0.3), ("a", 0.3), ("y", 0.3), ("m", 2.0), ("C-u", 0.8),     # fuzzy filter over title and project
-    ("C-s", 1.2),                                               # search inside conversations
+    ("p", 0.3), ("a", 0.3), ("y", 0.3), ("m", 2.0), ("C-u", 0.8),     # the project matches
     ("r", 0.3), ("e", 0.3), ("d", 0.3), ("i", 0.3), ("s", 3.0),     # found in a prompt, highlighted in the preview
-    ("C-s", 1.2), ("C-u", 1.0),                                 # back to the list
+    ("C-u", 1.0),                                               # all sessions again
     ("Down", 0.8), ("Down", 1.2),                               # a closed session
     ("C-r", 1.5), ("settings-dark-mode", 1.5), ("Enter", 3.0),  # rename it
 ]

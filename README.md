@@ -2,7 +2,7 @@
 
 `ccs` lists every [Claude Code](https://docs.anthropic.com/en/docs/claude-code) session you have run, across all your projects, newest first. Search it, preview what you asked, and press Enter to jump back into a session in the right folder.
 
-![ccs: statistics on top, sessions of all projects below with cost, time and context fill, the selected session's context and cache bars and prompts on the right; then text search and renaming](demo/ccs.svg)
+![ccs: statistics on top, sessions of all projects below with cost, time and context fill, the selected session's lines added and removed, context and cache bars and prompts on the right; then search and renaming](demo/ccs.svg)
 
 ## Install
 
@@ -57,7 +57,7 @@ The built-in picker only shows sessions of the folder you are in. `ccs` shows al
 
 ```bash
 ccs                 # interactive list
-ccs -s kafka lag    # only sessions that talk about both words, in text search
+ccs -s kafka lag    # only sessions that have both words, as if typed in the list
 ccs --list          # plain table, no fzf
 ccs stats           # activity heatmap, last 14 days, models, projects
 ccs --version
@@ -66,10 +66,9 @@ ccs --help
 
 | Key | Action |
 |---|---|
-| type | filter by title, project or date |
+| type | search titles, projects, branches, dates and conversations ([Search](#search)) |
 | ↑ ↓ | move; the preview follows |
 | Enter | resume the session in its folder (`cd <folder> && claude --resume <id>`) |
-| Ctrl-S | search inside conversations; press again to go back to the list |
 | Ctrl-R | rename the session; Claude Code's own `/resume` shows the new name too |
 | Ctrl-T | statistics full screen (`ccs stats`); arrows scroll, `q` goes back to the list |
 | Esc | quit |
@@ -80,30 +79,31 @@ A session that is already running is not opened a second time without asking:
 - A session open in another terminal or an IDE (`●` or `○`): `ccs` says where it is open (pid and terminal) and asks
   whether to open a copy (`claude --resume <id> --fork-session`) or to resume it anyway. Enter cancels.
 
-Search examples (fzf fuzzy search, words narrow it down):
-
-| Type | Finds |
-|---|---|
-| `payments` | sessions in the `payments-api` project |
-| `'2026-11-2` | sessions from 20–29 November 2026 (`'` = exact match) |
-| `refund retry` | sessions whose title mentions both words |
-
 Ctrl-R writes the name the way `/rename` does and keeps the session's place in Claude Code's own list. A session
 that is open in a running Claude is not renamed, because that Claude would write its old name back: use `/rename`
 there.
 
-### Search inside conversations
+### Search
 
-Ctrl-S turns the prompt into `text>`: what you type is looked up in your prompts and in Claude's replies, not in the
-title alone. Tool calls, their output and subagents are left out, so a match is something that was said.
+What you type is looked up everywhere at once: in the title, the project, the git branch, the day of the last message,
+your prompts and Claude's replies. Tool calls, their output and subagents are left out, so a match in a conversation
+is something that was said.
 
-- Every word has to occur somewhere in the session, in any case. A word matches inside longer words, so a stem finds
-  its forms: `кеш` finds `кешу` and `кешування`.
+| Type | Finds |
+|---|---|
+| `payments` | sessions in the `payments-api` project |
+| `2026-11-2` | sessions last active 20–29 November 2026 |
+| `PAY-512` | sessions on the branch `PAY-512-refund-retries` |
+| `payments retry` | sessions of `payments-api` that mention a retry |
+| `"retry policy"` | sessions where the phrase was said |
+
+- Every word has to occur somewhere in the session, in any case; the words may come from different places. A word
+  matches inside longer words, so a stem finds its forms: `кеш` finds `кешу` and `кешування`.
 - `"retry policy"` in quotes is one phrase.
-- The preview shows the messages that match, with the words highlighted.
-- Ctrl-S again goes back to the list; the query stays and filters the list as usual.
+- The preview shows the messages that match, with the words highlighted; when only the title, project, branch or
+  date matches, it shows your prompts.
 
-`ccs -s WORDS` opens straight in text search, and `ccs -s WORDS --list` prints the matching sessions.
+`ccs -s WORDS` opens the list with the words typed in, and `ccs -s WORDS --list` prints the matching sessions.
 
 The first search reads the text of all sessions (a few seconds); after that only changed sessions are read again.
 
@@ -147,13 +147,15 @@ Claude time adds up across sessions that run at the same time, so a busy day can
 | (status) | `●` Claude is working in it right now; `○` it is open in a terminal and waits for you; `!` it was closed before Claude finished its turn: you pressed Esc, declined a tool, or your last prompt got no answer. Blank: closed after Claude answered |
 | TITLE | the name you gave it with `/rename`, else Claude's title, else your first prompt. It comes last, so a narrow window cuts only the title |
 
+In its top right corner, the preview shows how many lines Claude added (green `+`) and removed (red `-`) in the session with Edit and Write, subagents included, counted the way `git diff --stat` counts them. Changes made through Bash (`sed`, `git checkout`) and your own edits are not in the transcript, so they do not count.
+
 The preview also shows two bars: 🧠 the context window (tokens and model) and ⚡ how much of the input Claude read from the prompt cache over the whole session, subagents included. Cached input costs a tenth, so green is good there.
 
 ## How it works
 
 - Claude Code stores each session as `~/.claude/projects/<project>/<session-id>.jsonl`, and its subagents under `<session-id>/subagents/`. A running Claude Code registers its session in `~/.claude/sessions/<pid>.json`, which gives `●` and `○`. `ccs` reads these files and nothing else; your sessions never leave your machine.
 - Prices come from [LiteLLM's public price table](https://github.com/BerriAI/litellm/blob/main/model_prices_and_context_window.json), the same source [ccusage](https://github.com/ryoppippi/ccusage) uses. `ccs` downloads it once a week and keeps only the Claude models. Costs match ccusage within a few cents per session, except for sessions forked from another session.
-- Everything it reads is cached in `~/.cache/cc-sessions`: `index-v<N>.json` for the list, `text-v<N>.json` for text search. The first run reads all sessions (a few seconds for a few GB); after that only sessions that changed are read again.
+- Everything it reads is cached in `~/.cache/cc-sessions`: `index-v<N>.json` for the list, `text-v<N>.json` for search. The first run reads all sessions (a few seconds for a few GB); after that only sessions that changed are read again.
 
 Settings, all optional:
 
@@ -197,4 +199,4 @@ uv run ccs --list       # run from the checkout
 python demo/record.py   # re-record demo/ccs.svg on made-up sessions (needs tmux)
 ```
 
-The code is in `src/ccs/`: `sessions.py` reads transcripts, `pricing.py` handles prices, `index.py` the cache, `cli.py` the list and fzf, `search.py` text search, `launch.py` how a session is opened.
+The code is in `src/ccs/`: `sessions.py` reads transcripts, `pricing.py` handles prices, `index.py` the cache, `cli.py` the list and fzf, `search.py` search, `launch.py` how a session is opened.

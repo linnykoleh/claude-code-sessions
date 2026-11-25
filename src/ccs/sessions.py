@@ -68,6 +68,8 @@ class Session:
     interrupted: bool = False  # closed before Claude finished its turn
     context: int = 0  # tokens in the context window at the last response (subagents have their own)
     model: str = ""  # the model of that response
+    lines_added: int = 0  # lines Claude added and removed with Edit and Write, subagents included
+    lines_removed: int = 0
     usage: Usage = field(default_factory=Usage)
     # by local day "YYYY-MM-DD", so a session that spans days counts toward each of them
     daily_usage: Dict[str, Usage] = field(default_factory=dict)
@@ -95,7 +97,7 @@ def find_session_files(projects_dir: Path) -> List[Path]:
 
 def parse_session(path: Path, with_usage: bool = True) -> Session:
     """Read one session: where it ran, its title, when, and (unless with_usage=False) its token
-    usage, subagents included."""
+    usage and the lines Claude changed, subagents included."""
     s = Session(id=path.stem, file=str(path))
     custom_title = ai_title = first_prompt = ""
     seen: set = set()
@@ -127,15 +129,15 @@ def parse_session(path: Path, with_usage: bool = True) -> Session:
                 first_prompt = prompt_text(rec) or ""
             elif kind == "assistant":
                 _note_context(rec, s)
-                if with_usage and _belongs(rec, s.id):
-                    _add_usage(rec, s, seen)
+            if with_usage and _belongs(rec, s.id):
+                _add_work(rec, s, seen)
 
     sub_dir = path.with_suffix("") / "subagents"
     if with_usage and sub_dir.is_dir():
         for agent_file in sub_dir.rglob("*.jsonl"):
             for rec in _records(agent_file):
-                if rec.get("type") == "assistant" and _belongs(rec, s.id):
-                    _add_usage(rec, s, seen)
+                if _belongs(rec, s.id):
+                    _add_work(rec, s, seen)
 
     s.title = " ".join((custom_title or ai_title or first_prompt).split())
     return s
@@ -273,6 +275,32 @@ def _note_context(rec: dict, s: Session) -> None:
         return
     s.context = sum(usage.get(k) or 0 for k in ("input_tokens", "cache_creation_input_tokens", "cache_read_input_tokens"))
     s.model = model
+
+
+def _add_work(rec: dict, s: Session, seen: set) -> None:
+    """Add what a record of the session or of its subagents counts: the tokens of a response, the lines of an edit."""
+    if rec.get("type") == "assistant":
+        _add_usage(rec, s, seen)
+    elif rec.get("type") == "user":
+        _add_line_changes(rec, s)
+
+
+def _add_line_changes(rec: dict, s: Session) -> None:
+    """Claude Code logs what an Edit or Write changed next to the tool's result: a patch, or the content of a new file.
+    A failed edit logs its error text instead."""
+    result = rec.get("toolUseResult")
+    hunks = result.get("structuredPatch") if isinstance(result, dict) else None
+    if not isinstance(hunks, list):
+        return
+    if not hunks and result.get("type") == "create" and isinstance(result.get("content"), str):
+        lines = result["content"].split("\n")
+        s.lines_added += len(lines) - (lines[-1] == "")  # "a\nb\n" is two lines, and so is "a\nb"
+        return
+    for hunk in hunks:
+        lines = hunk.get("lines") if isinstance(hunk, dict) else None
+        if isinstance(lines, list):
+            s.lines_added += sum(isinstance(line, str) and line.startswith("+") for line in lines)
+            s.lines_removed += sum(isinstance(line, str) and line.startswith("-") for line in lines)
 
 
 def _add_usage(rec: dict, s: Session, seen: set) -> None:

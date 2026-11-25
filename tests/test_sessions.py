@@ -166,6 +166,37 @@ def test_interrupted_when_the_last_turn_did_not_finish(projects, ending, interru
     assert parse_session(f).interrupted is interrupted
 
 
+def file_tool_result(tool_id, result, session_id=SID, **extra):
+    """What Claude Code logs after Edit or Write: the tool result, with the change in toolUseResult."""
+    return {"type": "user", "sessionId": session_id, "timestamp": T2, "toolUseResult": result,
+            "message": {"content": [{"type": "tool_result", "tool_use_id": tool_id, "content": "ok"}]}, **extra}
+
+
+def patch(*lines):
+    return {"filePath": "/code/payments-api/app.py",
+            "structuredPatch": [{"oldStart": 1, "oldLines": 3, "newStart": 1, "newLines": 4, "lines": list(lines)}]}
+
+
+def new_file(content):
+    return {"type": "create", "filePath": "/code/payments-api/new.py", "content": content, "structuredPatch": []}
+
+
+def test_counts_lines_claude_added_and_removed(projects):
+    f = make_session(projects, [
+        user("go", T0),
+        file_tool_result("t1", patch(" keep", "-old", "+new", "+more")),           # +2 -1
+        file_tool_result("t2", new_file("a\nb\nc\n")),                             # a new file: +3
+        file_tool_result("t3", new_file("x\ny")),                                  # no newline at the end: +2
+        file_tool_result("t4", "Error: String to replace not found in file."),     # a failed edit
+        file_tool_result("t5", patch("-copied"), session_id="other-session"),      # from the session it was forked from
+    ])
+    write_jsonl(f.with_suffix("") / "subagents" / "agent-a1.jsonl", [
+        file_tool_result("t6", patch("+by", "+a", "+subagent", "-x", "\\ No newline at end of file"), isSidechain=True),
+    ])
+    s = parse_session(f)
+    assert (s.lines_added, s.lines_removed) == (2 + 3 + 2 + 3, 1 + 1)
+
+
 def test_live_status_keeps_running_processes_only(tmp_path):
     import os, subprocess, sys
     dead = subprocess.Popen([sys.executable, "-c", ""])

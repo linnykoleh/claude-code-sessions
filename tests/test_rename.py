@@ -66,11 +66,3 @@ def test_an_open_session_is_not_renamed(transcript, live):
     assert cli.rename(transcript, SID, live, ask=ask) == 1
     assert transcript.read_text() == before
     assert "/rename" in ask.asked[0]  # the message says how to do it instead
-
-
-def test_reload_after_rename_keeps_the_mode(monkeypatch):
-    monkeypatch.setenv("FZF_PROMPT", cli.LIST_PROMPT)
-    monkeypatch.setenv("FZF_QUERY", "refund")
-    assert cli.refresh_query() == ""          # the list filters itself
-    monkeypatch.setenv("FZF_PROMPT", cli.TEXT_PROMPT)
-    assert cli.refresh_query() == "refund"    # text search asks ccs again

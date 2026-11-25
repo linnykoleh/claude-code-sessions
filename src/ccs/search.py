@@ -1,4 +1,4 @@
-"""Search inside conversations: your prompts and Claude's replies.
+"""Search sessions: their title, project, branch and day, and what was said in them, your prompts and Claude's replies.
 
 The text of every session is kept in a cache next to the index and read again only for transcripts that changed.
 Matching is plain case-insensitive substrings, so a word stem finds its forms (`кеш` finds `кешування`)."""
@@ -12,23 +12,25 @@ import shlex
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
-from ccs.sessions import Session, messages
+from ccs.sessions import Session, local_day, messages
 
 TEXT_CACHE_VERSION = 1
 SNIPPET_CONTEXT = 70  # characters shown on each side of a hit
 
 
 def search(sessions: List[Session], query: str, cache_dir: Path) -> List[Session]:
-    """The sessions whose title, prompts or replies contain every word of the query, in the order given.
-    "Words in quotes" are one phrase. An empty query keeps every session."""
+    """The sessions that have every word of the query somewhere: in the title, project, branch, the day of the last
+    message ("2026-11-24"), your prompts or Claude's replies; in the order given. "Words in quotes" are one phrase.
+    An empty query keeps every session."""
     words = query_words(query)
     if not words:
         return sessions
     texts = load_texts([Path(s.file) for s in sessions], cache_dir)
     found = []
     for s in sessions:
-        text = f"{(s.title or '').lower()}\n{texts.get(s.file, '')}"
-        if all(w in text for w in words):
+        about = "\n".join([s.title, s.project, s.branch, local_day(s.last_ts)]).lower()
+        said = texts.get(s.file, "")
+        if all(w in about or w in said for w in words):
             found.append(s)
     return found
 

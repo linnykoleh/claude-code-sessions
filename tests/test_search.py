@@ -1,5 +1,7 @@
 import json
 import os
+import subprocess
+import time
 from pathlib import Path
 
 import pytest
@@ -75,6 +77,18 @@ def test_search_needs_every_word_as_a_substring_in_any_case(three, tmp_path):
     assert ids("") == ["a", "b", "c"]           # no query: everything, order kept
 
 
+def test_search_also_finds_the_project_branch_and_day(three, tmp_path):
+    three[1].cwd, three[1].branch = "/code/payments-api", "PAY-512-retries"
+    three[2].last_ts = time.mktime((2026, 11, 24, 15, 0, 0, 0, 0, -1))
+    ids = lambda q: [s.id for s in search(three, q, tmp_path / "cache")]
+    assert ids("payments") == ["b"]                  # the project folder, not the whole path
+    assert ids("code") == []
+    assert ids("pay-512") == ["b"]                   # the branch
+    assert ids("2026-11-2") == ["c"]                 # the day of the last message
+    assert ids("payments policy") == ["b"]           # the words may come from different places
+    assert ids("payments kafka") == []
+
+
 def test_quotes_make_a_phrase(three, tmp_path):
     ids = lambda q: [s.id for s in search(three, q, tmp_path / "cache")]
     assert ids('"retry policy"') == ["b"]
@@ -118,10 +132,57 @@ def test_ccs_s_list_prints_only_matching_sessions(three, projects, tmp_path, mon
     assert lines[0].startswith("LAST ACTIVITY") and len(lines) == 2 and "Fix the refund worker" in lines[1]
 
 
-def test_ctrl_s_switches_between_the_list_and_text_search():
-    to_text = cli.switch_actions(cli.LIST_PROMPT, "ccs")
-    assert to_text.startswith(f"change-prompt({cli.TEXT_PROMPT})+disable-search+")
-    assert "reload(ccs --rows {q})" in to_text and "--find {q}" in to_text and to_text.endswith("rebind(change)")
-    back = cli.switch_actions(cli.TEXT_PROMPT, "ccs")
-    assert back.startswith(f"change-prompt({cli.LIST_PROMPT})+enable-search+")
-    assert "reload(ccs --rows '')" in back and "--find" not in back and back.endswith("unbind(change)")
+@pytest.fixture
+def fzf(tmp_path, monkeypatch):
+    """Run pick() against a fake fzf; returns what it was given: {"cmd": [...], "rows": [...]}."""
+    seen = {}
+
+    def run(cmd, input, **kwargs):
+        seen["cmd"], seen["rows"] = cmd, input.splitlines()[1:]  # without the header row
+        return subprocess.CompletedProcess(cmd, 130, stdout="")  # Esc
+
+    monkeypatch.setenv("FZF", "fzf")
+    monkeypatch.setattr(cli, "CACHE_DIR", tmp_path / "cache")
+    monkeypatch.setattr(cli.subprocess, "run", run)
+    return seen
+
+
+def test_one_search_box_looks_everywhere(three, fzf):
+    assert cli.pick(three, {}, {}) == 0
+    cmd = fzf["cmd"]
+    assert "--disabled" in cmd                                   # fzf does not filter, ccs does
+    assert f"--bind=change:reload:{cli.me_command()} --rows {{q}}" in cmd
+    assert any(a.startswith("--preview=") and a.endswith("--find {q}") for a in cmd)
+    assert any(a.startswith("--bind=ctrl-r:") and a.endswith("--rows {q})") for a in cmd)  # after a rename, same query
+    assert not any("ctrl-s" in a for a in cmd)
+    assert len(fzf["rows"]) == 3
+
+
+def test_fzf_draws_nothing_over_the_corner_of_the_preview(three, fzf):
+    """When the preview is longer than its window, fzf shows the scroll position in its top right corner,
+    over the lines added and removed; the scrollbar shows the position anyway."""
+    cli.pick(three, {}, {})
+    window = next(a for a in fzf["cmd"] if a.startswith("--preview-window="))
+    assert "noinfo" in window.split("=", 1)[1].split(",")
+
+
+def test_ccs_s_opens_with_the_query_and_its_sessions(three, fzf):
+    assert cli.pick(three, {}, {}, '"retry policy"') == 0
+    assert '--query="retry policy"' in fzf["cmd"]
+    assert [r.split("\t")[-1] for r in fzf["rows"]] == ["b"]
+
+
+def test_preview_shows_the_hits_or_your_prompts_when_only_the_title_or_project_matches(three, tmp_path, monkeypatch,
+                                                                                      capsys):
+    monkeypatch.setenv("CCS_OFFLINE", "1")
+    monkeypatch.setenv("FZF_PREVIEW_COLUMNS", "60")
+    monkeypatch.setattr(cli, "CACHE_DIR", tmp_path / "cache")
+    refund = Path(three[1].file)
+
+    def body(words):
+        cli.print_preview(refund, words)
+        return capsys.readouterr().out.split("\n\n", 1)[1]  # what comes after the title, folder and id
+
+    assert f"{cli.HIT}retry{cli.RESET}" in body(["retry"]) and "refund worker" not in body(["retry"])
+    assert "Fix the refund worker" in body(["api"]) and "retry" not in body(["api"])  # the project matched
+    assert "Fix the refund worker" in body([])

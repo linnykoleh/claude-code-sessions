@@ -30,6 +30,7 @@ PRICES = {
                           "cache_read": 0.3e-6, "context": 1_000_000},
 }
 CONTEXT_PER_RESPONSE = 4_000  # how much each response adds to the context, so long sessions fill up more
+EDIT_SHARE = 0.3  # how many of Claude's tool calls edit a file, so the preview shows lines added and removed
 # Sessions whose context ends elsewhere, so the CTX column shows yellow and red too (share of the 1M window)
 CONTEXT_AT_END = {"Add idempotency keys to webhooks": 0.86, "Upgrade React Native to 0.79": 0.71}
 
@@ -127,11 +128,12 @@ def main() -> None:
     (claude_dir / "sessions").mkdir(parents=True)
 
     rng = random.Random(42)
+    edits = random.Random(7)  # a generator of its own, so the edits leave the rest of the demo as it was
     now = time.time()
     for project, branch, title, ago, lasted, responses, state, prompts in SESSIONS:
         sid = str(uuid.UUID(int=rng.getrandbits(128), version=4))
         cwd = f"{HOME}/{project}"
-        records = transcript(rng, sid, cwd, branch, title, now - ago, lasted, responses, state, prompts)
+        records = transcript(rng, edits, sid, cwd, branch, title, now - ago, lasted, responses, state, prompts)
         path = claude_dir / "projects" / cwd.replace("/", "-") / f"{sid}.jsonl"
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text("".join(json.dumps(r) + "\n" for r in records))
@@ -143,8 +145,9 @@ def main() -> None:
     print(f"{len(SESSIONS)} demo sessions in {claude_dir}")
 
 
-def transcript(rng, sid, cwd, branch, title, start, lasted, responses, state, prompts):
-    """Records of one session: each prompt, then Claude's responses and the turn's duration."""
+def transcript(rng, edits, sid, cwd, branch, title, start, lasted, responses, state, prompts):
+    """Records of one session: each prompt, then Claude's responses with the files they edited, and the turn's
+    duration."""
     base = {"sessionId": sid, "cwd": cwd, "gitBranch": branch}
     records = [{"type": "ai-title", "aiTitle": title, "sessionId": sid}]
     per_prompt = max(1, responses // len(prompts))
@@ -162,13 +165,16 @@ def transcript(rng, sid, cwd, branch, title, start, lasted, responses, state, pr
             sent += 1
             t_resp = t + work * (j + 1) / per_prompt
             done = j == per_prompt - 1 and not (last_turn and state in ("busy", "cut"))
+            edit = not done and edits.random() < EDIT_SHARE
             records.append({**base, "type": "assistant", "timestamp": iso(t_resp), "requestId": f"req_{uuid.UUID(int=rng.getrandbits(128))}",
                             "message": {"id": f"msg_{uuid.UUID(int=rng.getrandbits(128))}",
                                         "model": "claude-opus-5-5" if rng.random() < 0.8 else "claude-sonnet-5-5",
                                         "stop_reason": "end_turn" if done else "tool_use",
                                         "content": [{"type": "text", "text": "Done."} if done
-                                                    else {"type": "tool_use", "name": "Bash"}],
+                                                    else {"type": "tool_use", "name": "Edit" if edit else "Bash"}],
                                         "usage": usage(rng, int(final * sent / total))}})
+            if edit:
+                records.append(edit_result(edits, base, t_resp))
         if last_turn and state == "cut":
             records.append({**base, "type": "user", "timestamp": iso(t + work + 5),
                             "message": {"content": [{"type": "text", "text": "[Request interrupted by user]"}]}})
@@ -176,6 +182,15 @@ def transcript(rng, sid, cwd, branch, title, start, lasted, responses, state, pr
             records.append({**base, "type": "system", "subtype": "turn_duration", "durationMs": int(work * 1000),
                             "timestamp": iso(t + work)})
     return records
+
+
+def edit_result(edits, base, ts: float):
+    """The result of an Edit, with the patch Claude Code logs next to it."""
+    lines = ["+new line"] * edits.randint(1, 40) + ["-old line"] * edits.randint(0, 15)
+    return {**base, "type": "user", "timestamp": iso(ts),
+            "message": {"content": [{"type": "tool_result", "tool_use_id": "toolu_demo", "content": "ok"}]},
+            "toolUseResult": {"filePath": f"{base['cwd']}/src/app.py", "structuredPatch": [
+                {"oldStart": 1, "oldLines": 0, "newStart": 1, "newLines": 0, "lines": lines}]}}
 
 
 def usage(rng, context: int):

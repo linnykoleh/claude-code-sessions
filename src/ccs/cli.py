@@ -1,8 +1,7 @@
 """ccs (Claude Code Sessions): browse and resume every Claude Code session across all projects.
 
   Enter   resume the session in its project folder (claude --resume <id>)
-  Type    to filter by title, project or date
-  Ctrl-S  switch to searching inside conversations (your prompts and Claude's replies) and back
+  Type    to search titles, projects, branches, dates and conversations (your prompts and Claude's replies)
   Ctrl-R  rename the session, as /rename does
   Ctrl-T  statistics (q goes back)
 
@@ -18,8 +17,9 @@ import shutil
 import subprocess
 import sys
 import time
+import unicodedata
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Tuple
 
 from ccs import __version__
 from ccs.index import load_sessions
@@ -37,7 +37,6 @@ BOLD, DIM, RESET = "\033[1m", "\033[2m", "\033[0m"
 TIME_WIDTH, PROJECT_WIDTH, TITLE_WIDTH = 19, 12, 60  # the date is 16 wide; 3 more keep it apart from PROJECT
 COST_WIDTH = 9  # "$1,234.56"
 STATUS_LEGEND = {"●": "Claude is working", "○": "open, waiting for you", "!": "stopped mid-turn"}
-LIST_PROMPT, TEXT_PROMPT = "sessions> ", "text> "
 HIT = "\033[1;33m"  # search words in the preview
 GREEN, YELLOW, RED = "\033[32m", "\033[33m", "\033[31m"
 BAR_WIDTH, EIGHTHS = 20, " ▏▎▍▌▋▊▉"
@@ -52,27 +51,23 @@ def main(argv: Optional[List[str]] = None) -> int:
     parser = argparse.ArgumentParser(
         prog="ccs",
         description="Browse and resume every Claude Code session across all your projects (newest first).",
-        epilog="Keys: Enter resumes the session in its folder, Ctrl-S searches inside conversations, "
-               "Ctrl-R renames the session, Ctrl-T shows statistics, Esc quits. "
+        epilog="Type to search titles, projects, branches, dates and conversations. Keys: Enter resumes the session "
+               "in its folder, Ctrl-R renames the session, Ctrl-T shows statistics, Esc quits. "
                "`ccs stats` prints the statistics.",
     )
     parser.add_argument("-s", "--search", nargs="+", metavar="WORD",
-                        help='only sessions whose prompts, replies or title contain every word; "two words" is a phrase')
+                        help="only sessions that have every word in their title, project, branch, date, prompts or "
+                             'replies; "two words" is a phrase')
     parser.add_argument("--list", action="store_true", help="print the session list without fzf")
     parser.add_argument("--version", action="version", version=f"ccs {__version__}")
     parser.add_argument("--preview", metavar="FILE", help=argparse.SUPPRESS)
     parser.add_argument("--find", metavar="QUERY", help=argparse.SUPPRESS)  # with --preview: show the hits
-    parser.add_argument("--rows", metavar="QUERY", help=argparse.SUPPRESS)  # fzf reload in text search
-    parser.add_argument("--switch", action="store_true", help=argparse.SUPPRESS)  # fzf Ctrl-S
+    parser.add_argument("--rows", metavar="QUERY", help=argparse.SUPPRESS)  # fzf reload on every keystroke
     parser.add_argument("--rename", nargs=2, metavar=("ID", "FILE"), help=argparse.SUPPRESS)  # fzf Ctrl-R
-    parser.add_argument("--refresh", action="store_true", help=argparse.SUPPRESS)  # fzf reload in either mode
     args = parser.parse_args(argv)
 
     if args.preview:
         print_preview(Path(args.preview), query_words(args.find or ""))
-        return 0
-    if args.switch:
-        print(switch_actions(os.environ.get("FZF_PROMPT", ""), me_command()))
         return 0
     if args.rename:
         session_id, path = args.rename
@@ -81,12 +76,10 @@ def main(argv: Optional[List[str]] = None) -> int:
     sessions = load_sessions(PROJECTS_DIR, CACHE_DIR)
     prices = load_prices(CACHE_DIR)
     live = live_status(LIVE_DIR)
-    if args.refresh:
-        args.rows = refresh_query()
-    query = args.rows if args.rows is not None else search_query(args.search)
     if args.rows is not None:
-        print("\n".join(fzf_lines(search(sessions, query, CACHE_DIR), prices, live)))
+        print("\n".join(fzf_lines(search(sessions, args.rows, CACHE_DIR), prices, live)))
         return 0
+    query = search_query(args.search)
     if args.list:
         print(header_row())
         for s in search(sessions, query or "", CACHE_DIR):
@@ -168,6 +161,43 @@ def bar(share: float, color: str) -> str:
     full, part = divmod(eighths, 8)
     filled = "█" * full + (EIGHTHS[part] if part else "")
     return f"{color}{filled}{RESET}{DIM}{'░' * (BAR_WIDTH - len(filled))}{RESET}"
+
+
+def title_lines(s: Session, width: int) -> List[str]:
+    """The preview's title in bold, with the lines Claude added (green) and removed (red) in the top right corner.
+    A title that does not fit next to them goes on in the line below."""
+    added, removed = f"+{s.lines_added:,}", f"-{s.lines_removed:,}"
+    corner = len(added) + 1 + len(removed)
+    first, rest = split_at_width(s.title or "(untitled)", width - corner - 1)  # at least one space before the corner
+    gap = " " * (width - cells(first) - corner)
+    lines = [f"{BOLD}{first}{RESET}{gap}{GREEN}{added}{RESET} {RED}{removed}{RESET}"]
+    return lines + [f"{BOLD}{rest}{RESET}"] if rest else lines
+
+
+def preview_width() -> int:
+    """Columns of the preview: fzf gives them to the preview command; else the terminal's."""
+    try:
+        return int(os.environ["FZF_PREVIEW_COLUMNS"])
+    except (KeyError, ValueError):
+        return shutil.get_terminal_size().columns
+
+
+def split_at_width(text: str, width: int) -> Tuple[str, str]:
+    """`text` split at a space so that the first part takes at most `width` cells; mid-word if a word is longer."""
+    used = 0
+    for i, ch in enumerate(text):
+        used += cells(ch)
+        if used > width:
+            space = text.rfind(" ", 0, i + 1)
+            at = space if space > 0 else i
+            return text[:at], text[at:].lstrip()
+    return text, ""
+
+
+def cells(text: str) -> int:
+    """How many terminal cells the text takes: wide characters (CJK, most emoji) take two, combining marks none."""
+    return sum(0 if unicodedata.category(ch) in ("Mn", "Me", "Cf")
+               else 2 if unicodedata.east_asian_width(ch) in ("W", "F") else 1 for ch in text)
 
 
 def usage_lines(s: Session, prices) -> List[str]:
@@ -277,11 +307,6 @@ def fmt_duration(seconds: float) -> str:
 
 # --- interactive picker ---
 
-def refresh_query() -> str:
-    """The text-search query to reload with: the one typed in text search; none in the list, which filters itself."""
-    return os.environ.get("FZF_QUERY", "") if os.environ.get("FZF_PROMPT") == TEXT_PROMPT else ""
-
-
 def rename(path: Path, session_id: str, live: Optional[Live], ask=None) -> int:
     """Ctrl-R: ask for a new name on the terminal and write it the way /rename does."""
     ask = ask or ask_tty
@@ -304,18 +329,8 @@ def fzf_lines(sessions: List[Session], prices, live: Dict[str, Live]) -> List[st
     return [header_row()] + [f"{row(s, prices, live, color=True)}\t{s.file}\t{s.cwd}\t{s.id}" for s in sessions]
 
 
-def switch_actions(prompt: str, me: str) -> str:
-    """fzf actions for Ctrl-S. The list filters itself (fuzzy, over title, project and date);
-    text search turns fzf's own filter off and asks ccs for the matching sessions on every keystroke."""
-    if prompt == TEXT_PROMPT:
-        return (f"change-prompt({LIST_PROMPT})+enable-search+change-preview({me} --preview {{{FILE_FIELD}}})"
-                f"+reload({me} --rows '')+unbind(change)")
-    return (f"change-prompt({TEXT_PROMPT})+disable-search+change-preview({me} --preview {{{FILE_FIELD}}} --find {{q}})"
-            f"+reload({me} --rows {{q}})+rebind(change)")
-
-
 def pick(sessions: List[Session], prices, live: Dict[str, Live], query: Optional[str] = None) -> int:
-    """The list; with a query it opens in text search."""
+    """The list, searched as you type; it opens with `query` typed in, if one is given."""
     fzf = os.environ.get("FZF") or shutil.which("fzf")
     if not fzf:
         print("ccs: fzf is required (https://github.com/junegunn/fzf). Use --list for a plain list.", file=sys.stderr)
@@ -324,26 +339,22 @@ def pick(sessions: List[Session], prices, live: Dict[str, Live], query: Optional
     me = me_command()
     table, *rows, top = stats_lines(sessions, prices, time.time())
     stats = "\n".join([f"{DIM}{table}{RESET}", *rows, f"{DIM}{top}{RESET}"])
-    keys = "Enter: resume · Ctrl-S: search inside conversations · Ctrl-R: rename · Ctrl-T: stats · Esc: quit"
+    keys = "Type to search · Enter: resume · Ctrl-R: rename · Ctrl-T: stats · Esc: quit"
     header = f"{stats}\n\n{keys}\n{legend(sessions, live)}\n "  # blank lines set the parts apart
     cmd = [
         fzf, "--ansi", "--layout=reverse", "--header-lines=1", "--delimiter=\t", f"--with-nth=1..{FILE_FIELD - 1}",
         "--tabstop=1",  # columns are padded already; a tab adds one space, not up to eight
-        "--no-sort", "--tiebreak=index",
-        f"--header={header}", "--preview-window=right,50%,wrap",
-        f"--bind=ctrl-s:transform:{me} --switch",
-        f"--bind=change:reload:{me} --rows {{q}}",
-        f"--bind=ctrl-r:execute({me} --rename {{{ID_FIELD}}} {{{FILE_FIELD}}})+reload({me} --refresh)",
+        "--prompt=sessions> ", f"--header={header}",
+        "--preview-window=right,50%,wrap,noinfo",  # no scroll position over the lines added and removed
+        # fzf's own filter sees only the row; ccs also looks at what was said, so it does the searching
+        "--disabled", f"--bind=change:reload:{me} --rows {{q}}",
+        f"--preview={me} --preview {{{FILE_FIELD}}} --find {{q}}",
+        f"--bind=ctrl-r:execute({me} --rename {{{ID_FIELD}}} {{{FILE_FIELD}}})+reload({me} --rows {{q}})",
         f"--bind=ctrl-t:execute({me} stats --color | less -R)",  # full screen; q in less goes back to the list
     ]
-    if query is None:
-        shown = sessions
-        cmd += [f"--prompt={LIST_PROMPT}", f"--preview={me} --preview {{{FILE_FIELD}}}", "--bind=start:unbind(change)"]
-    else:
-        shown = search(sessions, query, CACHE_DIR)
-        cmd += [f"--prompt={TEXT_PROMPT}", f"--preview={me} --preview {{{FILE_FIELD}}} --find {{q}}", "--disabled",
-                f"--query={query}"]
-    lines = fzf_lines(shown, prices, live)
+    if query:
+        cmd.append(f"--query={query}")
+    lines = fzf_lines(search(sessions, query or "", CACHE_DIR), prices, live)
     result = subprocess.run(cmd, input="\n".join(lines), stdout=subprocess.PIPE, text=True)
     if result.returncode != 0 or not result.stdout.strip():
         return 0  # Esc or Ctrl-C
@@ -363,12 +374,14 @@ def pick(sessions: List[Session], prices, live: Dict[str, Live], query: Optional
 
 
 def print_preview(path: Path, words: Optional[List[str]] = None) -> None:
-    """The session's title, folder, branch and id, then your prompts; in text search, the messages that match."""
+    """The session's title with the lines Claude changed, its folder, branch and id, then your prompts;
+    while you search, the messages that have the words, if any do."""
     s = parse_session(path) if path.exists() else None
     if s is None:
         print(f"{path} not found")
         return
-    print(f"{BOLD}{s.title or '(untitled)'}{RESET}")
+    for line in title_lines(s, preview_width()):
+        print(line)
     print(f"📁 {s.cwd}")
     if s.branch:
         print(f"🌿 {s.branch}")
@@ -376,15 +389,13 @@ def print_preview(path: Path, words: Optional[List[str]] = None) -> None:
     for line in usage_lines(s, load_prices(CACHE_DIR)):
         print(line)
     print()
-    if words:
-        hits = snippets(path, words)
-        if not hits:
-            print(f"{DIM}Only the title matches.{RESET}")
-        for ts, who, snippet in hits:
-            label = "you   " if who == "you" else "Claude"
-            print(f"{DIM}{fmt_time(ts)} {label}{RESET}  {highlight(snippet, words, HIT, RESET)}")
+    hits = snippets(path, words) if words else []
+    for ts, who, snippet in hits:
+        label = "you   " if who == "you" else "Claude"
+        print(f"{DIM}{fmt_time(ts)} {label}{RESET}  {highlight(snippet, words, HIT, RESET)}")
+    if hits:
         return
-    for i, (ts, text) in enumerate(prompts(path)):
+    for i, (ts, text) in enumerate(prompts(path)):  # nothing typed, or only the title, project, branch or date matched
         if i == 40:
             print(f"{DIM}…{RESET}")
             break

@@ -2,7 +2,7 @@ import json
 import re
 from pathlib import Path
 
-from ccs.cli import row, usage_lines
+from ccs.cli import row, title_lines, usage_lines
 from ccs.pricing import context_window
 from ccs.sessions import Session, Usage, parse_session
 
@@ -68,3 +68,28 @@ def test_preview_shows_context_and_cache_bars():
     assert context.startswith("🧠 ████████▏") and context.endswith("41%  412K of 1M context · claude-opus-5-5")
     assert cache.startswith("⚡ ███████████████████▏") and cache.endswith("96%  of input read from the prompt cache")
     assert usage_lines(session(0), PRICES) == []  # nothing known yet: no lines
+
+
+def titled(title, added=0, removed=0):
+    s = session(0)
+    s.title, s.lines_added, s.lines_removed = title, added, removed
+    return s
+
+
+def test_preview_shows_the_lines_claude_changed_in_the_top_right_corner():
+    (line,) = title_lines(titled("Fix the refund worker", 1_234, 56), 40)
+    assert ANSI.sub("", line) == "Fix the refund worker" + " " * 9 + "+1,234 -56"   # 40 wide, flush right
+    assert "\033[32m+1,234" in line and "\033[31m-56" in line                       # plus green, minus red
+
+
+def test_a_title_too_long_for_the_corner_goes_on_below():
+    lines = title_lines(titled("Rotate refresh tokens on every use and revoke the whole family"), 40)
+    assert [ANSI.sub("", line) for line in lines] == [
+        "Rotate refresh tokens on every use +0 -0",
+        "and revoke the whole family",
+    ]
+
+
+def test_wide_characters_take_two_cells():
+    (line,) = title_lines(titled("🚀 Деплой", 3, 1), 20)
+    assert ANSI.sub("", line) == "🚀 Деплой" + " " * 6 + "+3 -1"
