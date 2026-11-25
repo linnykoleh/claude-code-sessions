@@ -149,7 +149,7 @@ Claude time adds up across sessions that run at the same time, so a busy day can
 
 In its top right corner, the preview shows how many lines Claude added (green `+`) and removed (red `-`) in the session with Edit and Write, subagents included, counted the way `git diff --stat` counts them. Changes made through Bash (`sed`, `git checkout`) and your own edits are not in the transcript, so they do not count.
 
-The preview also shows two bars: 🧠 the context window (tokens and model) and ⚡ how much of the input Claude read from the prompt cache over the whole session, subagents included. Cached input costs a tenth, so green is good there.
+Under the title, the preview names the session's folder, branch and session ID, then shows two bars: Context, how full the context window is (tokens and model), and Cache, how much of the input Claude read from the prompt cache over the whole session, subagents included. Cached input costs a tenth, so green is good there.
 
 ## How it works
 

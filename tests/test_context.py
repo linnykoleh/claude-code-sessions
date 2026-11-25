@@ -65,8 +65,8 @@ def test_preview_shows_context_and_cache_bars():
     s.usage.add("claude-opus-5-5", {"input_tokens": 1_000, "cache_creation_input_tokens": 3_000,
                                     "cache_read_input_tokens": 96_000})
     context, cache = (ANSI.sub("", line) for line in usage_lines(s, PRICES))
-    assert context.startswith("🧠 ████████▏") and context.endswith("41%  412K of 1M context · claude-opus-5-5")
-    assert cache.startswith("⚡ ███████████████████▏") and cache.endswith("96%  of input read from the prompt cache")
+    assert context.startswith("Context    ████████▏") and context.endswith("41%  412K of 1M tokens · claude-opus-5-5")
+    assert cache.startswith("Cache      ███████████████████▏") and cache.endswith("96%  of input read from the prompt cache")
     assert usage_lines(session(0), PRICES) == []  # nothing known yet: no lines
 
 
