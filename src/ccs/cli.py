@@ -200,13 +200,18 @@ def cells(text: str) -> int:
                else 2 if unicodedata.east_asian_width(ch) in ("W", "F") else 1 for ch in text)
 
 
+def caption(name: str) -> str:
+    """A dim name in front of a preview line, padded so the values line up."""
+    return f"{DIM}{name:<11}{RESET}"
+
+
 def usage_lines(s: Session, prices) -> List[str]:
     """The preview's context and cache lines; none before the first response."""
     share = context_share(s, prices)
     if share is None:
         return []
     window = context_window(s.model, prices, s.context)
-    lines = [f"🧠 {bar(share, fill_color(share))} {share:4.0%}  {fmt_tokens(s.context)} of {fmt_tokens(window)} context"
+    lines = [f"{caption('Context')}{bar(share, fill_color(share))} {share:4.0%}  {fmt_tokens(s.context)} of {fmt_tokens(window)} tokens"
              f" · {s.model}"]
     t = {k: sum(m.get(k, 0) for m in s.usage.tokens.values())
          for k in ("input", "cache_write", "cache_write_1h", "cache_read")}
@@ -214,7 +219,7 @@ def usage_lines(s: Session, prices) -> List[str]:
     if total_input:
         hit = t["cache_read"] / total_input  # high is good: cached input costs a tenth
         color = GREEN if hit >= 0.8 else YELLOW if hit >= 0.5 else RED
-        lines.append(f"⚡ {bar(hit, color)} {hit:4.0%}  of input read from the prompt cache")
+        lines.append(f"{caption('Cache')}{bar(hit, color)} {hit:4.0%}  of input read from the prompt cache")
     return lines
 
 
@@ -382,10 +387,10 @@ def print_preview(path: Path, words: Optional[List[str]] = None) -> None:
         return
     for line in title_lines(s, preview_width()):
         print(line)
-    print(f"📁 {s.cwd}")
+    print(f"{caption('Folder')}{s.cwd}")
     if s.branch:
-        print(f"🌿 {s.branch}")
-    print(f"🆔 {s.id}")
+        print(f"{caption('Branch')}{s.branch}")
+    print(f"{caption('Session ID')}{s.id}")
     for line in usage_lines(s, load_prices(CACHE_DIR)):
         print(line)
     print()
