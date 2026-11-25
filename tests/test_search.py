@@ -173,6 +173,15 @@ def test_ccs_s_opens_with_the_query_and_its_sessions(three, fzf):
     assert [r.split("\t")[-1] for r in fzf["rows"]] == ["b"]
 
 
+def test_the_keys_line_names_exactly_the_ctrl_keys_ccs_binds(three, fzf):
+    """A key the line names but nothing binds does nothing; a key ccs binds but the line leaves out is never found."""
+    cli.pick(three, {}, {})
+    header = next(a for a in fzf["cmd"] if a.startswith("--header="))
+    named = set(re.findall(r"Ctrl-([A-Z])\b", header))
+    bound = {a[len("--bind=ctrl-"):].split(":", 1)[0].upper() for a in fzf["cmd"] if a.startswith("--bind=ctrl-")}
+    assert named == bound
+
+
 def test_preview_shows_the_hits_or_your_prompts_when_only_the_title_or_project_matches(three, tmp_path, monkeypatch,
                                                                                       capsys):
     monkeypatch.setenv("CCS_OFFLINE", "1")

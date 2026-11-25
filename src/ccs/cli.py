@@ -3,9 +3,6 @@
   Enter   resume the session in its project folder (claude --resume <id>)
   Type    to search titles, projects, branches, dates and conversations (your prompts and Claude's replies)
   Ctrl-R  rename the session, as /rename does
-  Ctrl-T  statistics (q goes back)
-
-ccs stats [--json] [--weeks N]   activity heatmap, last 14 days, models and projects
 """
 
 from __future__ import annotations
@@ -47,14 +44,11 @@ FILE_FIELD, CWD_FIELD, ID_FIELD = 8, 9, 10
 
 def main(argv: Optional[List[str]] = None) -> int:
     argv = sys.argv[1:] if argv is None else argv
-    if argv[:1] == ["stats"]:
-        return stats_main(argv[1:])
     parser = argparse.ArgumentParser(
         prog="ccs",
         description="Browse and resume every Claude Code session across all your projects (newest first).",
         epilog="Type to search titles, projects, branches, dates and conversations. Keys: Enter resumes the session "
-               "in its folder, Ctrl-R renames the session, Ctrl-T shows statistics, Esc quits. "
-               "`ccs stats` prints the statistics.",
+               "in its folder, Ctrl-R renames the session, Esc quits.",
     )
     parser.add_argument("-s", "--search", nargs="+", metavar="WORD",
                         help="only sessions that have every word in their title, project, branch, date, prompts or "
@@ -87,25 +81,6 @@ def main(argv: Optional[List[str]] = None) -> int:
             print(row(s, prices, live))
         return 0
     return pick(sessions, prices, live, query)
-
-
-def stats_main(argv: List[str]) -> int:
-    from ccs import stats  # it uses this module's formatting
-
-    parser = argparse.ArgumentParser(prog="ccs stats", description="How you work with Claude: an activity heatmap, "
-                                     "the last 14 days, models and projects.")
-    parser.add_argument("--json", action="store_true", help="print the numbers as JSON")
-    parser.add_argument("--weeks", type=int, default=26, metavar="N", help="weeks in the heatmap (default 26)")
-    parser.add_argument("--color", action="store_true", help="colours even when the output is not a terminal")
-    args = parser.parse_args(argv)
-    sessions, prices = load_sessions(PROJECTS_DIR, CACHE_DIR), load_prices(CACHE_DIR)
-    if args.json:
-        print(stats.as_json(sessions, prices))
-        return 0
-    lines = stats.render(sessions, prices, today=local_day(time.time()), weeks=max(1, args.weeks),
-                         color=args.color or sys.stdout.isatty())
-    print("\n".join(lines))
-    return 0
 
 
 def search_query(words: Optional[List[str]]) -> Optional[str]:
@@ -365,7 +340,7 @@ def pick(sessions: List[Session], prices, live: Dict[str, Live], query: Optional
     me = me_command()
     table, *rows, top = stats_lines(sessions, prices, time.time())
     stats = "\n".join([f"{DIM}{table}{RESET}", *rows, f"{DIM}{top}{RESET}"])
-    keys = "Type to search · Enter: resume · Ctrl-R: rename · Ctrl-T: stats · Esc: quit"
+    keys = "Type to search · Enter: resume · Ctrl-R: rename · Esc: quit"
     header = f"{stats}\n\n{keys}\n{legend(sessions, live)}\n "  # blank lines set the parts apart
     cmd = [
         fzf, "--ansi", "--layout=reverse", "--header-lines=1", "--delimiter=\t", f"--with-nth=1..{FILE_FIELD - 1}",
@@ -376,7 +351,6 @@ def pick(sessions: List[Session], prices, live: Dict[str, Live], query: Optional
         "--disabled", f"--bind=change:reload:{me} --rows {{q}}",
         f"--preview={me} --preview {{{FILE_FIELD}}} --find {{q}}",
         f"--bind=ctrl-r:execute({me} --rename {{{ID_FIELD}}} {{{FILE_FIELD}}})+reload({me} --rows {{q}})",
-        f"--bind=ctrl-t:execute({me} stats --color | less -R)",  # full screen; q in less goes back to the list
     ]
     if query:
         cmd.append(f"--query={query}")
