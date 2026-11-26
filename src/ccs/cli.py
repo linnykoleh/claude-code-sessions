@@ -39,7 +39,7 @@ TIME_WIDTH, TITLE_WIDTH = 19, 60  # the date is 16 wide; 3 more keep it apart fr
 # PROJECT fits the names of PROJECT_SHARE of the sessions, within these bounds, so a few sessions of a project with a
 # long name do not push COST away for all the others; a narrow terminal takes it down to PROJECT_MIN so that TITLE
 # keeps TITLE_MIN. COST is as wide as the largest cost, with COST_GAP in front of it.
-PROJECT_MIN, PROJECT_MAX, TITLE_MIN, COST_GAP = 12, 28, 20, 3
+PROJECT_MIN, PROJECT_MAX, TITLE_MIN, COST_GAP = 12, 28, 20, 0
 PROJECT_SHARE = 0.95
 HIT = "\033[1;33m"  # search words in the preview
 GREEN, YELLOW, RED = "\033[32m", "\033[33m", "\033[31m"

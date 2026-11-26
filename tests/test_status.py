@@ -90,13 +90,13 @@ def test_every_reload_gives_fzf_the_legend_and_the_spinner_of_that_moment(tmp_pa
 
 
 def test_project_and_cost_stay_apart_even_when_both_are_as_wide_as_they_get():
-    """fzf shows a tab as one space (--tabstop=1); the COST column adds three more in front of the widest cost."""
+    """fzf shows a tab as one space (--tabstop=1); the COST column adds COST_GAP more in front of the widest cost."""
     s = Session(id="a", file="f", cwd="/code/data-pipelines", title="t", first_ts=1e9, last_ts=1e9)
     prices = {"claude-opus-5-5": {"input": 1.0, "output": 0.0, "cache_write": 0.0, "cache_write_1h": 0.0,
                                   "cache_read": 0.0}}
     s.usage.add("claude-opus-5-5", {"input_tokens": 1234.56})
     line = cli.row(s, prices, {}).replace("\t", " ")
-    assert re.search(r"data-pipeli… {4}\$1,234\.56 ", line)
+    assert re.search(r"data-pipeli… {%d}\$1,234\.56 " % (cli.COST_GAP + 1), line)
     header = cli.header_row().replace("\t", " ")
     assert header.index("COST") + len("COST") == line.index("$1,234.56") + len("$1,234.56")  # titles stay aligned
 
