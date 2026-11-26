@@ -150,6 +150,31 @@ def prompts(path: Path) -> Iterator[Tuple[Optional[float], str]]:
             yield ts, text
 
 
+@dataclass
+class Turn:
+    """One exchange: a prompt you typed and the last thing Claude wrote before your next prompt."""
+
+    ts: Optional[float]
+    prompt: str
+    reply_ts: Optional[float] = None
+    reply: str = ""
+
+    @property
+    def end_ts(self) -> Optional[float]:
+        return self.reply_ts or self.ts
+
+
+def turns(path: Path) -> List[Turn]:
+    """Your prompts in order, each with Claude's last reply to it: mostly what Claude did or found."""
+    out: List[Turn] = []
+    for ts, who, text in messages(path):
+        if who == "you":
+            out.append(Turn(ts, text))
+        elif out:  # anything Claude wrote before your first prompt answers nothing
+            out[-1].reply_ts, out[-1].reply = ts, text
+    return out
+
+
 def messages(path: Path) -> Iterator[Tuple[Optional[float], str, str]]:
     """(timestamp, "you" or "claude", text) of what you typed and what Claude wrote back:
     no thinking, tool calls, tool output or subagents."""
@@ -169,6 +194,8 @@ def messages(path: Path) -> Iterator[Tuple[Optional[float], str, str]]:
 
 
 def prompt_text(rec: dict) -> Optional[str]:
+    if rec.get("isMeta") or rec.get("isCompactSummary"):  # Claude Code's own: skill text, messages of other
+        return None                                         # sessions, the summary /compact leaves
     content = (rec.get("message") or {}).get("content")
     if isinstance(content, str) and content.strip() and not _NOT_A_PROMPT.match(content):
         return content

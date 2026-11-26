@@ -27,7 +27,7 @@ from ccs.index import load_sessions
 from ccs.launch import ask_tty, resume_command, where
 from ccs.search import highlight, query_words, search, snippets
 from ccs.pricing import context_window, load_prices
-from ccs.sessions import Live, Session, live_status, local_day, parse_session, prompts, rename_session
+from ccs.sessions import Live, Session, Turn, live_status, local_day, parse_session, rename_session, turns
 
 CLAUDE_DIR = Path(os.environ.get("CLAUDE_CONFIG_DIR", Path.home() / ".claude"))
 PROJECTS_DIR = CLAUDE_DIR / "projects"
@@ -57,6 +57,12 @@ STATUS_MARKS = {WORKING: SPINNER[0], NEEDS_YOU: "◉", WAITING: "○", STOPPED: 
 STATUS_COLORS = {WORKING: BRIGHT_GREEN, NEEDS_YOU: PINK, WAITING: LIGHT_BLUE, STOPPED: RED, CLOSED: ""}
 BAR_WIDTH, EIGHTHS = 20, " ▏▎▍▌▋▊▉"
 PROMPT_CELLS = 300  # of each prompt in the preview; longer ones end in …
+REPLY_CELLS = 200  # of each reply of Claude in the conversation: its first sentences say what it did
+# Markdown in Claude's replies, which reads as noise once the reply is on one line: code fences, bold, headings,
+# the rule under a table's header and the bars at the ends of its rows
+MARKDOWN = re.compile(r"```[\w+-]*|\*\*|^#{1,6} +|^\|?[ :|-]*-{3,}[ :|-]*\|?$|^\| *| *\|$", re.MULTILINE)
+PREVIEW_TURNS = 40  # the newest exchanges in the preview; past them, how many are left out and the very first one
+BREAK_SECONDS = 30 * 60  # a pause this long before your next prompt gets a line of its own in the preview
 # fzf fields: the 7 visible columns, then hidden ones the bindings use
 FILE_FIELD, CWD_FIELD, ID_FIELD = 8, 9, 10
 
@@ -548,8 +554,8 @@ def pick(sessions: List[Session], prices, live: Dict[str, Live], query: Optional
 
 
 def print_preview(path: Path, words: Optional[List[str]] = None) -> None:
-    """The session's title with the lines Claude changed, its folder, branch and id, then your prompts;
-    while you search, the messages that have the words, if any do."""
+    """The session's title with the lines Claude changed, its folder, branch and id, then the conversation, newest
+    first; while you search, the messages that have the words, if any do, newest first too."""
     s = parse_session(path) if path.exists() else None
     if s is None:
         print(f"{path} not found")
@@ -565,14 +571,61 @@ def print_preview(path: Path, words: Optional[List[str]] = None) -> None:
     print()
     width = preview_width()
     hits = snippets(path, words) if words else []
-    for ts, who, snippet in hits:
-        who = "you   " if who == "you" else "Claude"
-        print("\n".join(message_lines(f"{fmt_time(ts)} {who}  ", snippet, width, words)))
     if hits:
+        print(f"{caption('Found')}{plural(len(hits), 'message')}, newest first")
+        for ts, who, snippet in hits[:-PREVIEW_TURNS - 1:-1]:
+            print("\n".join(message_lines(message_head(ts, who), snippet, width, words)))
+        if len(hits) > PREVIEW_TURNS:
+            print(f"{DIM}… {plural(len(hits) - PREVIEW_TURNS, 'more message')}{RESET}")
         return
-    for i, (ts, text) in enumerate(prompts(path)):  # nothing typed, or only the title, project, branch or date matched
-        if i == 40:
-            print(f"{DIM}…{RESET}")
-            break
-        shown, rest = split_at_width(" ".join(text.split()), PROMPT_CELLS)
-        print("\n".join(message_lines(f"{fmt_time(ts)}  ", shown + ("…" if rest else ""), width)))
+    # nothing typed, or only the title, project, branch or date matched
+    exchanges = turns(path)
+    if exchanges:
+        print(f"{caption('Prompts')}{len(exchanges)}, newest first")
+    for line in conversation_lines(exchanges, width):
+        print(line)
+
+
+def plural(n: int, noun: str) -> str:
+    return f"{n} {noun}{'' if n == 1 else 's'}"
+
+
+def conversation_lines(exchanges: List[Turn], width: int) -> List[str]:
+    """The newest PREVIEW_TURNS exchanges, newest first: your prompt, then Claude's last reply to it. A pause of
+    BREAK_SECONDS or more before a prompt gets a line. When more are left out than the first one, a line says how
+    many, and the very first exchange closes the preview: what the session set out to do."""
+    shown, first = exchanges[::-1], None
+    if len(exchanges) > PREVIEW_TURNS + 1:
+        shown, first = shown[:PREVIEW_TURNS], exchanges[0]
+    lines: List[str] = []
+    for newer, t in zip([None] + shown, shown):
+        if newer and newer.ts and t.end_ts and newer.ts - t.end_ts >= BREAK_SECONDS:
+            lines.append(f"{' ' * cells(fmt_time(None))}{DIM}── {fmt_duration(newer.ts - t.end_ts)} break ──{RESET}")
+        lines += turn_lines(t, width)
+    if first:
+        more = len(exchanges) - PREVIEW_TURNS - 1
+        lines.append(f"{DIM}… {plural(more, 'more prompt')} · the first one:{RESET}")
+        lines += turn_lines(first, width)
+    return lines
+
+
+def turn_lines(t: Turn, width: int) -> List[str]:
+    lines = message_lines(message_head(t.ts, "you"), clip(t.prompt, PROMPT_CELLS), width)
+    if t.reply:
+        lines += message_lines(message_head(t.reply_ts, "claude"), reply_line(t.reply), width)
+    return lines
+
+
+def reply_line(reply: str) -> str:
+    """Claude's reply on one line, its first REPLY_CELLS cells, without the Markdown that would read as noise there."""
+    return clip(MARKDOWN.sub("", "\n".join(line.strip() for line in reply.splitlines())), REPLY_CELLS)
+
+
+def message_head(ts: Optional[float], who: str) -> str:
+    return f"{fmt_time(ts)} {'You   ' if who == 'you' else 'Claude'}  "
+
+
+def clip(text: str, width: int) -> str:
+    """The message on one line, its first `width` cells; a longer one ends in …"""
+    shown, rest = split_at_width(" ".join(text.split()), width)
+    return shown + ("…" if rest else "")

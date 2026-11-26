@@ -9,7 +9,7 @@ import pytest
 
 from ccs import cli
 from ccs.search import TEXT_CACHE_VERSION, search, snippets
-from ccs.sessions import Session, messages
+from ccs.sessions import Session, messages, turns
 
 SID = "11111111-2222-3333-4444-555555555555"
 
@@ -199,7 +199,7 @@ def test_preview_shows_the_hits_or_your_prompts_when_only_the_title_or_project_m
         return capsys.readouterr().out.split("\n\n", 1)[1]  # what comes after the title, folder and id
 
     assert f"{cli.HIT}retry{cli.RESET}" in body(["retry"]) and "refund worker" not in body(["retry"])
-    assert "Fix the refund worker" in body(["api"]) and "retry" not in body(["api"])  # the project matched
+    assert "Fix the refund worker" in body(["api"]) and cli.HIT not in body(["api"])  # the project matched
     assert "Fix the refund worker" in body([])
 
 
@@ -211,10 +211,13 @@ def test_snippets_start_and_end_on_whole_words(projects):
     assert set(snippet.strip("…").split()) <= {"alpha", "the", "retry", "policy", "omega"}
 
 
-def preview_body(path, words, capsys):
+def preview_body(path, words, capsys, caption=False):
+    """The preview's lines after the title, folder and id, without colors; and without the line that says what
+    follows, unless `caption`."""
     cli.print_preview(path, words)
-    body = capsys.readouterr().out.split("\n\n", 1)[1]  # what comes after the title, folder and id
-    return [re.sub(r"\x1b\[[0-9;]*m", "", line) for line in body.rstrip("\n").split("\n")]
+    body = capsys.readouterr().out.split("\n\n", 1)[1]
+    lines = [re.sub(r"\x1b\[[0-9;]*m", "", line) for line in body.rstrip("\n").split("\n")]
+    return lines if caption else lines[1:]
 
 
 @pytest.mark.parametrize("words", [[], ["tooling"]])
@@ -238,3 +241,86 @@ def test_preview_cuts_a_long_prompt_after_a_whole_word(projects, tmp_path, monke
     col = lines[0].index("abcdefg")
     shown = " ".join(line[col:] for line in lines)
     assert shown.endswith("abcdefg…") and set(shown.rstrip("…").split()) == {"abcdefg"}
+
+
+def at(minutes):
+    """A timestamp `minutes` after 2026-11-20 10:00 UTC."""
+    return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(1763632800 + minutes * 60))
+
+
+def test_turns_pair_each_prompt_with_claudes_last_reply(projects):
+    f = transcript(projects, "a", [
+        claude(text("Before any prompt."), ts=at(0)),
+        you("Why does the refund retry forever?", ts=at(1)),
+        claude(text("Let me look."), ts=at(2)),
+        you([{"type": "tool_result", "content": "grep output"}], ts=at(3)),
+        claude(text("Because of the 409."), ts=at(4)),
+        you("Skill text Claude Code put in", ts=at(5), isMeta=True),
+        you("This session is being continued from a previous conversation", ts=at(6), isCompactSummary=True),
+        you("Fix it.", ts=at(7)),
+    ])
+    assert [(t.prompt, t.reply) for t in turns(f)] == [
+        ("Why does the refund retry forever?", "Because of the 409."), ("Fix it.", "")]
+    assert turns(f)[0].end_ts == turns(f)[0].reply_ts and turns(f)[1].end_ts == turns(f)[1].ts
+
+
+def test_preview_shows_the_newest_exchange_first_with_claudes_reply(projects, tmp_path, monkeypatch, capsys):
+    monkeypatch.setenv("CCS_OFFLINE", "1")
+    monkeypatch.setenv("FZF_PREVIEW_COLUMNS", "80")
+    monkeypatch.setattr(cli, "CACHE_DIR", tmp_path / "cache")
+    f = transcript(projects, "a", [
+        you("first prompt", ts=at(0)), claude(text("first reply"), ts=at(5)),
+        you("second prompt", ts=at(20)), claude(text("second reply"), ts=at(25)),
+        you("third prompt", ts=at(25 + 150)),  # 2h 30m after the second reply
+    ])
+    lines = [line.split("  ", 1)[1].strip() if "  " in line else line.strip() for line in preview_body(f, [], capsys)]
+    assert lines == ["third prompt", "── 2h break ──", "second prompt", "second reply", "first prompt", "first reply"]
+    assert " You " in preview_body(f, [], capsys)[0] and " Claude " in preview_body(f, [], capsys)[3]
+
+
+def test_a_long_session_shows_the_newest_exchanges_then_the_first(projects, tmp_path, monkeypatch, capsys):
+    monkeypatch.setenv("CCS_OFFLINE", "1")
+    monkeypatch.setenv("FZF_PREVIEW_COLUMNS", "80")
+    monkeypatch.setattr(cli, "CACHE_DIR", tmp_path / "cache")
+    n = cli.PREVIEW_TURNS + 5
+    f = transcript(projects, "a", [you(f"prompt {i}", ts=at(i)) for i in range(n)])
+    lines = preview_body(f, [], capsys)
+    assert lines[0].endswith(f"prompt {n - 1}") and lines[cli.PREVIEW_TURNS - 1].endswith("prompt 5")
+    assert lines[cli.PREVIEW_TURNS:] == ["… 4 more prompts · the first one:", lines[-1]]
+    assert lines[-1].endswith("prompt 0")
+    # one more than the cap shows them all: a line about one left-out prompt would take as much room as the prompt
+    f = transcript(projects, "b", [you(f"prompt {i}", ts=at(i)) for i in range(cli.PREVIEW_TURNS + 1)])
+    assert len(preview_body(f, [], capsys)) == cli.PREVIEW_TURNS + 1
+
+
+def test_search_shows_the_newest_hits_first(projects, tmp_path, monkeypatch, capsys):
+    monkeypatch.setenv("CCS_OFFLINE", "1")
+    monkeypatch.setenv("FZF_PREVIEW_COLUMNS", "80")
+    monkeypatch.setattr(cli, "CACHE_DIR", tmp_path / "cache")
+    f = transcript(projects, "a", [you(f"retry {i}", ts=at(i)) for i in range(50)])
+    lines = preview_body(f, ["retry"], capsys, caption=True)
+    assert lines[0] == "Found      50 messages, newest first"
+    assert lines[1].endswith("retry 49") and lines[40].endswith("retry 10") and lines[41:] == ["… 10 more messages"]
+
+
+def test_the_preview_says_what_follows_and_in_which_order(projects, tmp_path, monkeypatch, capsys):
+    monkeypatch.setenv("CCS_OFFLINE", "1")
+    monkeypatch.setenv("FZF_PREVIEW_COLUMNS", "80")
+    monkeypatch.setattr(cli, "CACHE_DIR", tmp_path / "cache")
+    f = transcript(projects, "a", [you("Fix the refund retry", ts=at(0)), claude(text("Fixed."), ts=at(1)),
+                                   you("thanks", ts=at(2))])
+    assert preview_body(f, [], capsys, caption=True)[0] == "Prompts    2, newest first"
+    assert preview_body(f, ["api"], capsys, caption=True)[0] == "Prompts    2, newest first"  # only the project matched
+    assert preview_body(f, ["retry"], capsys, caption=True)[0] == "Found      1 message, newest first"
+
+
+def test_claudes_reply_loses_its_markdown_but_keeps_its_words():
+    reply = ("Done. **What changed:**\n\n```bash\ncurl -fsSL x | bash\n```\n\n## Result\n\n"
+             "| Period | output |\n|---|---|\n| Today | 2.2M |")
+    lines = cli.turn_lines(cli.Turn(1e9, "q", 1e9, reply), 200)
+    shown = re.sub(r"\x1b\[[0-9;]*m", "", lines[1]).split("Claude  ", 1)[1]
+    assert shown == "Done. What changed: curl -fsSL x | bash Result Period | output Today | 2.2M"
+    long = cli.turn_lines(cli.Turn(1e9, "q", 1e9, "word " * 100), 1000)[1]
+    assert cli.cells(re.sub(r"\x1b\[[0-9;]*m", "", long).split("Claude  ", 1)[1]) <= cli.REPLY_CELLS + 1
+
+

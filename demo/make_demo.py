@@ -114,6 +114,37 @@ SESSIONS = [
     ]),
 ]
 
+# Claude's last reply to a prompt, for the sessions the demo shows; the others answer "Done."
+REPLIES = {
+    "The refund worker retries forever when the bank API returns 409. Find out why.":
+        "Found it: RetryPolicy treats every 4xx except 400 as transient, so a 409 from the bank is retried with no "
+        "limit. The bank sends 409 when the refund already exists, so it should count as done, not be retried.",
+    "Make the retry policy configurable and add a test for the 409 case.":
+        "RetryPolicy now reads max_attempts, backoff and the retryable status codes from config/refunds.yaml. A 409 "
+        "marks the refund as done. Added test_refund_conflict_is_not_retried: it fails on main and passes now.",
+    "Run the whole test suite and fix what breaks.":
+        "All 212 tests pass. Two broke on the new config: test_worker_backoff expected the old hard-coded delays, "
+        "and test_settings_defaults did not know the new keys. Fixed both.",
+    "We are adding eu-west-3. Copy the eu-central-1 stack and adjust the CIDRs.":
+        "Created envs/eu-west-3 from eu-central-1. The VPC uses 10.40.0.0/16 and the subnets 10.40.0.0/20 to "
+        "10.40.80.0/20, so nothing overlaps the other regions. Provider and backend point to eu-west-3.",
+    "Show me the plan, only the resources that change.":
+        "Plan: 47 to add, 0 to change, 0 to destroy, all in the new region: the VPC and 6 subnets, 3 NAT gateways, "
+        "the EKS cluster with 2 node groups and the RDS subnet group. Nothing in eu-central-1 changes.",
+    "Add a dark theme toggle to the settings page, keep the choice in localStorage.":
+        "Added a Dark theme switch to Settings. ThemeProvider reads the choice from localStorage (key: theme) and "
+        "falls back to the system setting. Colors moved to CSS variables, so every page follows the theme.",
+    "The toggle flickers on page load. Fix it.":
+        "The page rendered light first and switched once React loaded. A small inline script in index.html now sets "
+        "data-theme before the first paint, so the page opens in the right theme with no flash.",
+    "Webhooks are sometimes delivered twice. Add idempotency keys.":
+        "Every webhook now carries an Idempotency-Key header (the event id). The handler records the keys it has "
+        "processed and answers 200 without doing the work again when a key comes back.",
+    "Store the keys in Redis with a 24h TTL.":
+        "Keys now go to Redis with SET NX and a 24h TTL, so two deliveries racing each other cannot both pass. If "
+        "Redis is down, the handler answers 503 and the sender retries later.",
+}
+
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
@@ -172,7 +203,7 @@ def transcript(rng, edits, sid, cwd, branch, title, start, lasted, responses, st
                             "message": {"id": f"msg_{uuid.UUID(int=rng.getrandbits(128))}",
                                         "model": "claude-opus-5-5" if rng.random() < 0.8 else "claude-sonnet-5-5",
                                         "stop_reason": "end_turn" if done else "tool_use",
-                                        "content": [{"type": "text", "text": "Done."} if done
+                                        "content": [{"type": "text", "text": REPLIES.get(prompt, "Done.")} if done
                                                     else {"type": "tool_use", "name": "Edit" if edit else "Bash"}],
                                         "usage": usage(rng, int(final * sent / total))}})
             if edit:

@@ -16,7 +16,7 @@ from typing import Dict, List, Optional, Tuple
 from ccs.index import remove_leftovers
 from ccs.sessions import Session, local_day, messages
 
-TEXT_CACHE_VERSION = 1
+TEXT_CACHE_VERSION = 2
 SNIPPET_CONTEXT = 70  # characters shown on each side of a hit
 
 
@@ -45,8 +45,9 @@ def query_words(query: str) -> List[str]:
     return [" ".join(p.lower().split()) for p in parts if p.strip()]
 
 
-def snippets(path: Path, words: List[str], limit: int = 40) -> List[Tuple[Optional[float], str, str]]:
-    """(timestamp, who, snippet) of the messages that contain one of the words: the text around the first hit."""
+def snippets(path: Path, words: List[str]) -> List[Tuple[Optional[float], str, str]]:
+    """(timestamp, who, snippet) of the messages that contain one of the words, in order: the text around the first
+    hit in each."""
     hits = []
     for ts, who, text in messages(path):
         flat = " ".join(text.split())
@@ -63,8 +64,6 @@ def snippets(path: Path, words: List[str], limit: int = 40) -> List[Tuple[Option
             space = flat.rfind(" ", hit_end, end)
             end = space if space >= 0 else end
         hits.append((ts, who, ("…" if start else "") + flat[start:end] + ("…" if end < len(flat) else "")))
-        if len(hits) == limit:
-            break
     return hits
 
 

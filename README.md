@@ -47,7 +47,7 @@ curl -fsSL https://raw.githubusercontent.com/linnykoleh/claude-code-sessions/mai
 # or, in a clone: git pull && ./install.sh
 ```
 
-The script prints the version change, for example `Upgraded ccs 0.2.0 -> 0.3.0`. `ccs --version` shows the version you have.
+The script prints the version change, for example `Upgraded ccs 0.3.0 -> 0.4.0`. `ccs --version` shows the version you have.
 
 ## Why not `claude --resume`?
 
@@ -98,8 +98,9 @@ is something that was said.
 - Every word has to occur somewhere in the session, in any case; the words may come from different places. A word
   matches inside longer words, so a stem finds its forms: `кеш` finds `кешу` and `кешування`.
 - `"retry policy"` in quotes is one phrase.
-- The preview shows the messages that match, with the words highlighted; when only the title, project, branch or
-  date matches, it shows your prompts.
+- The preview shows the messages that match, newest first, with the words highlighted, under a line that says how
+  many there are (`Found      7 messages, newest first`); when only the title, project, branch or date matches, it
+  shows the conversation.
 
 `ccs -s WORDS` opens the list with the words typed in, and `ccs -s WORDS --list` prints the matching sessions.
 
@@ -134,6 +135,8 @@ The line above the column titles counts the listed sessions by status.
 In its top right corner, the preview shows how many lines Claude added (green `+`) and removed (red `-`) in the session with Edit and Write, subagents included, counted the way `git diff --stat` counts them. Changes made through Bash (`sed`, `git checkout`) and your own edits are not in the transcript, so they do not count.
 
 Under the title, the preview names the session's folder, branch and session ID, then shows two bars: Context, how full the context window is (tokens and model), and Cache, how much of the input Claude read from the prompt cache over the whole session, subagents included. Cached input costs a tenth, so green is good there.
+
+Below them is the conversation, newest first, so you see where the session stopped; the line above it, `Prompts    64, newest first`, says how many prompts the session has. Each of your prompts comes with Claude's last reply to it, which mostly says what Claude did or found; a reply is cut at 200 characters and loses its Markdown, a prompt at 300. A line like `── 2h break ──` marks where you were away for 30 minutes or more. A long session shows its newest 40 exchanges, then how many are left out, and last the very first one: what the session set out to do. Text that Claude Code puts in the transcript itself, such as a skill's instructions or the summary `/compact` leaves, is not shown as your prompt.
 
 ### Live list
 
